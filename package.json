@@ -8,7 +8,9 @@
     "start": "next start -p 3001",
     "type-check": "tsc --noEmit",
     "lint": "eslint .",
-    "test": "tsx --test --test-force-exit test/**/*.test.ts"
+    "test": "tsx --test --test-force-exit test/**/*.test.ts",
+    "workers": "tsx src/worker.ts",
+    "seed": "tsx src/lib/db/seed.ts"
   },
   "dependencies": {
     "bullmq": "^6.4.0",

@@ -737,3 +737,17 @@ export async function seedDemoIdentities(): Promise<void> {
     }
   }
 }
+
+// Enable direct execution via tsx src/lib/db/seed.ts
+if (typeof process !== "undefined" && process.argv[1] && process.argv[1].includes("seed.ts")) {
+  seedDemoIdentities()
+    .then(() => {
+      console.log("✅ Synthetic demo identities and healthcare fixtures seeded successfully.");
+      process.exit(0);
+    })
+    .catch((err) => {
+      console.error("❌ Failed to seed database:", err);
+      process.exit(1);
+    });
+}
+
