@@ -103,7 +103,7 @@ export async function getHealthRecordsForPatient(
     const activeConsents = await ConsentArtifact.find({
       patientId: new mongoose.Types.ObjectId(patientId),
       requesterDoctorId: new mongoose.Types.ObjectId(principal.id),
-      status: "GRANTED",
+      status: { $in: ["APPROVED", "GRANTED"] },
       expiresAt: { $gt: now },
     });
 
@@ -127,7 +127,11 @@ export async function getHealthRecordsForPatient(
     let latestDate: Date | null = null;
 
     for (const consent of activeConsents) {
-      consent.hiTypes.forEach((t) => allowedHiTypes.add(t));
+      const types =
+        consent.approvedHiTypes && consent.approvedHiTypes.length > 0
+          ? consent.approvedHiTypes
+          : consent.hiTypes;
+      types.forEach((t) => allowedHiTypes.add(t));
       if (!earliestDate || consent.dateRangeFrom < earliestDate) {
         earliestDate = consent.dateRangeFrom;
       }

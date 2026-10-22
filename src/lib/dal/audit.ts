@@ -5,7 +5,7 @@ import { connectToDatabase } from "@/lib/db/connect";
 
 export interface LogAuditParams {
   action: string;
-  principal?: AuthenticatedPrincipal | null;
+  principal?: Partial<AuthenticatedPrincipal> | null;
   targetResourceType: string;
   targetResourceId?: string;
   targetPatientId?: string | mongoose.Types.ObjectId;

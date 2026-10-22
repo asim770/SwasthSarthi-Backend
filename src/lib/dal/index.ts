@@ -10,3 +10,4 @@ export * from "./laboratory";
 export * from "./pharmacy";
 export * from "./admin";
 export * from "./handler";
+export * from "./abdmTransfer";

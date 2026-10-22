@@ -20,6 +20,7 @@ export interface ILabOrder extends Document {
   orderedAt: Date;
   completedAt?: Date;
   reportRecordId?: string;
+  fhirResource?: Record<string, unknown>;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -102,6 +103,9 @@ const LabOrderSchema = new Schema<ILabOrder>(
     },
     reportRecordId: {
       type: String,
+    },
+    fhirResource: {
+      type: Schema.Types.Mixed,
     },
   },
   {

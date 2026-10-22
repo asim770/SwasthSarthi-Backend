@@ -47,3 +47,10 @@ export class InvalidQueryError extends AuthorizationError {
     this.name = "InvalidQueryError";
   }
 }
+
+export class InvalidStateTransitionError extends AuthorizationError {
+  constructor(message = "Invalid state transition for consent resource.") {
+    super(message, 409, "INVALID_STATE_TRANSITION");
+    this.name = "InvalidStateTransitionError";
+  }
+}

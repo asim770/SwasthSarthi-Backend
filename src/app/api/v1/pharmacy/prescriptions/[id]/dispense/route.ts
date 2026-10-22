@@ -9,6 +9,9 @@ import { apiSuccess } from "@/lib/api/response";
 import { handleCorsPreflight } from "@/lib/api/cors";
 
 const dispenseSchema = z.object({
+  quantityToDispense: z.number().int().positive().optional(),
+  idempotencyKey: z.string().max(100).optional(),
+  batchNumber: z.string().max(50).optional(),
   notes: z.string().max(300).optional(),
 });
 
@@ -31,8 +34,8 @@ export async function POST(
     }
     const validatedInput = dispenseSchema.parse(body);
 
-    const prescription = await recordDispensation(principal, id, validatedInput);
-    return apiSuccess(prescription, request, { status: 200 });
+    const result = await recordDispensation(principal, id, validatedInput);
+    return apiSuccess(result, request, { status: 200 });
   } catch (err) {
     return handleDalError(err, request);
   }

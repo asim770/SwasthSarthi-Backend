@@ -11,7 +11,7 @@ import { handleCorsPreflight } from "@/lib/api/cors";
 
 const createConsentSchema = z.object({
   patientId: z.string().min(1, "patientId is required"),
-  purpose: z.string().min(5).max(250),
+  purpose: z.string().min(5, "Purpose must be at least 5 characters").max(250),
   hiTypes: z.array(z.string()).min(1, "At least one hiType is required"),
   dateRangeFrom: z.string().transform((v) => new Date(v)),
   dateRangeTo: z.string().transform((v) => new Date(v)),
@@ -25,7 +25,10 @@ export async function OPTIONS(request: NextRequest): Promise<NextResponse> {
 export async function GET(request: NextRequest): Promise<NextResponse> {
   try {
     const principal = await requireAuthenticatedUser(request);
-    const consents = await getConsentsForPrincipal(principal);
+    const { searchParams } = new URL(request.url);
+    const statusFilter = searchParams.get("status") || undefined;
+
+    const consents = await getConsentsForPrincipal(principal, statusFilter);
     return apiSuccess(consents, request, { status: 200 });
   } catch (err) {
     return handleDalError(err, request);

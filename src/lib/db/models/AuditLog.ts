@@ -4,10 +4,17 @@ import { UserRole } from "./User";
 export type AuditOutcome = "ALLOWED" | "DENIED" | "FAILED";
 
 export interface IAuditLog extends Document {
+  eventId: string;
+  sequenceNumber?: number;
+  previousEventHash?: string;
+  currentEventHash?: string;
+  schemaVersion: number;
+  correlationId?: string;
   action: string;
   principalId?: mongoose.Types.ObjectId;
   principalRole?: UserRole | "anonymous";
   principalName?: string;
+  facility?: string;
   targetResourceType: string;
   targetResourceId?: string;
   targetPatientId?: mongoose.Types.ObjectId;
@@ -21,6 +28,32 @@ export interface IAuditLog extends Document {
 
 const AuditLogSchema = new Schema<IAuditLog>(
   {
+    eventId: {
+      type: String,
+      required: true,
+      index: true,
+      default: () => `EVT-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
+    },
+    sequenceNumber: {
+      type: Number,
+      index: true,
+    },
+    previousEventHash: {
+      type: String,
+      index: true,
+    },
+    currentEventHash: {
+      type: String,
+      index: true,
+    },
+    schemaVersion: {
+      type: Number,
+      default: 1,
+    },
+    correlationId: {
+      type: String,
+      index: true,
+    },
     action: {
       type: String,
       required: true,
@@ -37,6 +70,10 @@ const AuditLogSchema = new Schema<IAuditLog>(
     },
     principalName: {
       type: String,
+    },
+    facility: {
+      type: String,
+      index: true,
     },
     targetResourceType: {
       type: String,
@@ -85,6 +122,21 @@ const AuditLogSchema = new Schema<IAuditLog>(
 
 AuditLogSchema.index({ timestamp: -1 });
 AuditLogSchema.index({ principalId: 1, timestamp: -1 });
+AuditLogSchema.index({ sequenceNumber: 1 });
+AuditLogSchema.index({ targetPatientId: 1, timestamp: -1 });
+
+// Strictly prevent application-level mutations and deletions to enforce append-only security
+const rejectAuditMutation = function () {
+  throw new Error("Audit records are append-only and cannot be mutated or deleted.");
+};
+
+AuditLogSchema.pre("updateOne", rejectAuditMutation);
+AuditLogSchema.pre("updateMany", rejectAuditMutation);
+AuditLogSchema.pre("findOneAndUpdate", rejectAuditMutation);
+AuditLogSchema.pre("replaceOne", rejectAuditMutation);
+AuditLogSchema.pre("deleteOne", rejectAuditMutation);
+AuditLogSchema.pre("deleteMany", rejectAuditMutation);
+AuditLogSchema.pre("findOneAndDelete", rejectAuditMutation);
 
 export const AuditLog: Model<IAuditLog> =
   mongoose.models.AuditLog || mongoose.model<IAuditLog>("AuditLog", AuditLogSchema);

@@ -119,7 +119,16 @@ export async function listDiscoverablePatients(
     .select("_id name abhaId abhaAddress gender dateOfBirth phone")
     .limit(20);
 
-  return patients;
+  return patients.map((p) => ({
+    id: p._id.toString(),
+    _id: p._id,
+    name: p.name,
+    abhaId: p.abhaId,
+    abhaAddress: p.abhaAddress,
+    gender: p.gender,
+    dateOfBirth: p.dateOfBirth,
+    phone: p.phone,
+  })) as unknown as Partial<IUser>[];
 }
 
 /**

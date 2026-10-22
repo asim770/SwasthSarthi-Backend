@@ -126,7 +126,7 @@ export function assertDenyAdminClinicalAccess(
 ): void {
   if (principal.role === "admin") {
     throw new ForbiddenError(
-      `Security Violation: Administrators are strictly forbidden from viewing or accessing ${context}. Administrative privileges do not grant clinical data access.`
+      `Security Violation: Administrative users are strictly forbidden from viewing or accessing ${context}. Administrators are strictly forbidden from clinical data access. Administrative privileges do not grant clinical access.`
     );
   }
 }

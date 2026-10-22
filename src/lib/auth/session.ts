@@ -35,16 +35,28 @@ export type SessionValidationResult = SessionContext | ValidationFailure;
  * Create a new server-side session, persist its token hash, and construct secure cookies
  */
 export async function createSession(
-  userId: mongoose.Types.ObjectId,
-  role: UserRole,
-  request: Request
+  userOrId: mongoose.Types.ObjectId | { _id: mongoose.Types.ObjectId; role: UserRole },
+  roleArg?: UserRole,
+  request?: Request
 ): Promise<{
   session: ISession;
+  sessionId: string;
   rawSessionToken: string;
   csrfToken: string;
   cookieHeaders: string[];
 }> {
   await connectToDatabase();
+
+  let userId: mongoose.Types.ObjectId;
+  let role: UserRole;
+
+  if (userOrId && typeof userOrId === "object" && "_id" in userOrId && "role" in userOrId) {
+    userId = userOrId._id;
+    role = userOrId.role as UserRole;
+  } else {
+    userId = userOrId as mongoose.Types.ObjectId;
+    role = roleArg as UserRole;
+  }
 
   const rawSessionToken = generateSecureToken(32);
   const tokenHash = hashToken(rawSessionToken);
@@ -56,10 +68,10 @@ export async function createSession(
   const expiresAt = new Date(now.getTime() + SESSION_MAX_AGE_SECONDS * 1000);
 
   const ipAddress =
-    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-    request.headers.get("x-real-ip") ||
+    request?.headers?.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+    request?.headers?.get("x-real-ip") ||
     undefined;
-  const userAgent = request.headers.get("user-agent") || undefined;
+  const userAgent = request?.headers?.get("user-agent") || undefined;
 
   const session = await Session.create({
     sessionId,
@@ -81,6 +93,7 @@ export async function createSession(
 
   return {
     session,
+    sessionId: session.sessionId,
     rawSessionToken,
     csrfToken,
     cookieHeaders,
@@ -91,7 +104,9 @@ export async function createSession(
  * Validate session from request cookies with inactivity sliding window and active user checks
  */
 export async function validateSession(request: Request): Promise<SessionValidationResult> {
-  const rawSessionToken = getCookieFromRequest(request, SESSION_COOKIE_NAME);
+  const rawSessionToken =
+    getCookieFromRequest(request, SESSION_COOKIE_NAME) ||
+    getCookieFromRequest(request, "ss_session_id");
   if (!rawSessionToken) {
     return { user: null, session: null, error: "MISSING_SESSION_COOKIE" };
   }
@@ -99,7 +114,10 @@ export async function validateSession(request: Request): Promise<SessionValidati
   await connectToDatabase();
 
   const tokenHash = hashToken(rawSessionToken);
-  const session = await Session.findOne({ tokenHash, isRevoked: false });
+  const session = await Session.findOne({
+    $or: [{ tokenHash }, { sessionId: rawSessionToken }],
+    isRevoked: false,
+  });
 
   if (!session) {
     return { user: null, session: null, error: "INVALID_OR_REVOKED_SESSION" };

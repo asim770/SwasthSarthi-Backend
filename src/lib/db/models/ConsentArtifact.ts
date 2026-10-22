@@ -1,6 +1,23 @@
 import mongoose, { Schema, Document, Model } from "mongoose";
 
-export type ConsentStatus = "REQUESTED" | "GRANTED" | "DENIED" | "REVOKED" | "EXPIRED";
+export type ConsentStatus =
+  | "PENDING"
+  | "APPROVED"
+  | "DENIED"
+  | "REVOKED"
+  | "EXPIRED"
+  | "REQUESTED"
+  | "GRANTED";
+
+export interface IConsentDecisionHistory {
+  action: "REQUESTED" | "PENDING" | "APPROVED" | "DENIED" | "REVOKED" | "EXPIRED";
+  actorId: mongoose.Types.ObjectId;
+  actorRole: string;
+  actorName: string;
+  timestamp: Date;
+  note?: string;
+  approvedHiTypes?: string[];
+}
 
 export interface IConsentArtifact extends Document {
   consentId: string;
@@ -8,18 +25,59 @@ export interface IConsentArtifact extends Document {
   requesterDoctorId: mongoose.Types.ObjectId;
   requesterFacility: string;
   purpose: string;
-  hiTypes: string[]; // e.g. ["DiagnosticReport", "Encounter", "Immunization", "Observation", "MedicationRequest"]
+  hiTypes: string[]; // e.g. ["DiagnosticReport", "Encounter", "Immunization", "Observation", "MedicationRequest", "MedicationDispense", "DocumentReference"]
+  approvedHiTypes: string[];
   dateRangeFrom: Date;
   dateRangeTo: Date;
   expiresAt: Date;
   status: ConsentStatus;
+  version: number;
+  decisionHistory: IConsentDecisionHistory[];
   grantedAt?: Date;
   revokedAt?: Date;
   deniedAt?: Date;
+  expiredAt?: Date;
   signature?: string;
   createdAt: Date;
   updatedAt: Date;
 }
+
+const DecisionHistorySchema = new Schema<IConsentDecisionHistory>(
+  {
+    action: {
+      type: String,
+      required: true,
+      enum: ["REQUESTED", "PENDING", "APPROVED", "DENIED", "REVOKED", "EXPIRED"],
+    },
+    actorId: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+    },
+    actorRole: {
+      type: String,
+      required: true,
+    },
+    actorName: {
+      type: String,
+      required: true,
+    },
+    timestamp: {
+      type: Date,
+      default: Date.now,
+      required: true,
+    },
+    note: {
+      type: String,
+      trim: true,
+    },
+    approvedHiTypes: {
+      type: [String],
+      default: [],
+    },
+  },
+  { _id: false }
+);
 
 const ConsentArtifactSchema = new Schema<IConsentArtifact>(
   {
@@ -57,6 +115,10 @@ const ConsentArtifactSchema = new Schema<IConsentArtifact>(
       required: true,
       default: [],
     },
+    approvedHiTypes: {
+      type: [String],
+      default: [],
+    },
     dateRangeFrom: {
       type: Date,
       required: true,
@@ -73,9 +135,18 @@ const ConsentArtifactSchema = new Schema<IConsentArtifact>(
     status: {
       type: String,
       required: true,
-      enum: ["REQUESTED", "GRANTED", "DENIED", "REVOKED", "EXPIRED"],
-      default: "REQUESTED",
+      enum: ["PENDING", "APPROVED", "DENIED", "REVOKED", "EXPIRED", "REQUESTED", "GRANTED"],
+      default: "PENDING",
       index: true,
+    },
+    version: {
+      type: Number,
+      default: 1,
+      required: true,
+    },
+    decisionHistory: {
+      type: [DecisionHistorySchema],
+      default: [],
     },
     grantedAt: {
       type: Date,
@@ -84,6 +155,9 @@ const ConsentArtifactSchema = new Schema<IConsentArtifact>(
       type: Date,
     },
     deniedAt: {
+      type: Date,
+    },
+    expiredAt: {
       type: Date,
     },
     signature: {
@@ -95,7 +169,7 @@ const ConsentArtifactSchema = new Schema<IConsentArtifact>(
   }
 );
 
-// Compound index for efficient consent lookups: active consent by patient, doctor, status
+// Compound index for active consent lookups: active consent by patient, doctor, status
 ConsentArtifactSchema.index({
   patientId: 1,
   requesterDoctorId: 1,
@@ -106,3 +180,4 @@ ConsentArtifactSchema.index({
 export const ConsentArtifact: Model<IConsentArtifact> =
   mongoose.models.ConsentArtifact ||
   mongoose.model<IConsentArtifact>("ConsentArtifact", ConsentArtifactSchema);
+

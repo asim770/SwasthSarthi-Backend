@@ -5,7 +5,13 @@ export type HealthResourceType =
   | "Encounter"
   | "Immunization"
   | "Observation"
-  | "MedicationRequest";
+  | "MedicationRequest"
+  | "MedicationDispense"
+  | "DocumentReference"
+  | "ServiceRequest"
+  | "Patient"
+  | "Practitioner"
+  | "Organization";
 
 export interface IHealthRecord extends Document {
   recordId: string;
@@ -54,6 +60,12 @@ const HealthRecordSchema = new Schema<IHealthRecord>(
         "Immunization",
         "Observation",
         "MedicationRequest",
+        "MedicationDispense",
+        "DocumentReference",
+        "ServiceRequest",
+        "Patient",
+        "Practitioner",
+        "Organization",
       ],
       index: true,
     },

@@ -72,6 +72,9 @@ describe("SwasthSaarthi — Step 5: Secure DAL and Role-Based Access Control Sui
       });
     }
 
+    // Clean up any test consents for secondPatient so Doctor has 0 consents
+    await ConsentArtifact.deleteMany({ patientId: secondPatient._id });
+
     patientUser = (await User.findOne({ abhaAddress: "rahul.verma@sbx" }))!;
     otherPatientUser = secondPatient;
     doctorUser = (await User.findOne({ abhaAddress: "dr.ananya@hpr.sbx" }))!;
