@@ -9,7 +9,8 @@ export function getCorsHeaders(request: Request | NextRequest): HeadersInit {
   const origin = request.headers.get("origin");
   const headers: Record<string, string> = {
     "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With, Accept",
+    "Access-Control-Allow-Headers":
+      "Content-Type, Authorization, X-Requested-With, Accept, x-csrf-token, X-CSRF-Token",
     "Access-Control-Max-Age": "86400",
     Vary: "Origin",
   };
@@ -21,6 +22,9 @@ export function getCorsHeaders(request: Request | NextRequest): HeadersInit {
   } else if (!origin) {
     // Server-to-server or same-origin direct calls without origin header
     headers["Access-Control-Allow-Origin"] = allowedOrigins[0] || "*";
+    if (allowedOrigins[0]) {
+      headers["Access-Control-Allow-Credentials"] = "true";
+    }
   }
 
   return headers;

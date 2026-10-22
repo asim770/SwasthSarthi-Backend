@@ -17,6 +17,14 @@ export async function GET(request: NextRequest) {
       status: "operational",
       endpoints: {
         health: "/api/v1/health",
+        auth: {
+          challenge: "/api/v1/auth/challenge",
+          verify: "/api/v1/auth/verify",
+          profile: "/api/v1/auth/me",
+          session: "/api/v1/auth/session",
+          logout: "/api/v1/auth/logout",
+          devOtp: "/api/v1/auth/mock-otp",
+        },
       },
     },
     request

@@ -15,6 +15,14 @@ const envSchema = z.object({
   CORS_ALLOWED_ORIGINS: z
     .string()
     .default("http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173"),
+  OTP_PEPPER: z
+    .string()
+    .default("swasth_saarthi_demo_otp_pepper_2026"),
+  CSRF_PEPPER: z
+    .string()
+    .default("swasth_saarthi_demo_csrf_pepper_2026"),
+  SESSION_MAX_AGE_SECONDS: z.coerce.number().default(86400),
+  SESSION_INACTIVITY_TIMEOUT_SECONDS: z.coerce.number().default(7200),
 });
 
 export type Env = z.infer<typeof envSchema>;

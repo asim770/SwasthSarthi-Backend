@@ -33,9 +33,10 @@ export function apiSuccess<T>(
     status?: number;
     meta?: Record<string, unknown>;
     headers?: Record<string, string>;
+    cookies?: string[];
   } = {}
 ): NextResponse<ApiSuccessResponse<T>> {
-  const { status = 200, meta, headers: extraHeaders = {} } = options;
+  const { status = 200, meta, headers: extraHeaders = {}, cookies = [] } = options;
   const corsHeaders = getCorsHeaders(request);
 
   const payload: ApiSuccessResponse<T> = {
@@ -45,13 +46,19 @@ export function apiSuccess<T>(
     timestamp: new Date().toISOString(),
   };
 
-  return NextResponse.json(payload, {
+  const response = NextResponse.json(payload, {
     status,
     headers: {
       ...corsHeaders,
       ...extraHeaders,
     },
   });
+
+  for (const cookie of cookies) {
+    response.headers.append("Set-Cookie", cookie);
+  }
+
+  return response;
 }
 
 export function apiError(
@@ -61,9 +68,10 @@ export function apiError(
     status?: number;
     fallbackMessage?: string;
     code?: string;
+    cookies?: string[];
   } = {}
 ): NextResponse<ApiErrorResponse> {
-  const { status = 500, fallbackMessage = "An unexpected error occurred", code } = options;
+  const { status = 500, fallbackMessage = "An unexpected error occurred", code, cookies = [] } = options;
   const corsHeaders = getCorsHeaders(request);
 
   let statusCode = status;
@@ -74,7 +82,7 @@ export function apiError(
   if (error instanceof ZodError) {
     statusCode = 400;
     errorCode = "VALIDATION_ERROR";
-    errorMessage = "Invalid request payload or query parameters";
+    errorMessage = "Invalid request payload or parameters";
     details = error.issues.map((issue) => ({
       field: issue.path.join("."),
       message: issue.message,
@@ -96,8 +104,14 @@ export function apiError(
     timestamp: new Date().toISOString(),
   };
 
-  return NextResponse.json(payload, {
+  const response = NextResponse.json(payload, {
     status: statusCode,
     headers: corsHeaders,
   });
+
+  for (const cookie of cookies) {
+    response.headers.append("Set-Cookie", cookie);
+  }
+
+  return response;
 }
