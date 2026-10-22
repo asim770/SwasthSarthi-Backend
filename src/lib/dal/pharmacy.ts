@@ -17,6 +17,7 @@ import {
 } from "./policies";
 import { assertSafeIdentifier, assertSafeQueryInput } from "./sanitizer";
 import { logAuditEvent } from "./audit";
+import { assertFacilityApproved } from "./onboarding";
 import { connectToDatabase } from "@/lib/db/connect";
 import { validateFhirResource } from "@/lib/fhir/validator";
 
@@ -350,6 +351,7 @@ export async function recordDispensation(
   if (!principal.facility) {
     throw new ForbiddenError("Pharmacist is not affiliated with a registered pharmacy facility.");
   }
+  await assertFacilityApproved(principal.facility);
 
   // 1. Idempotency Check: if idempotencyKey supplied, ensure duplicate requests return previous state
   const idempotencyKey = input?.idempotencyKey?.trim() || `IDEMP-DISP-${prescriptionId}-${Date.now()}`;

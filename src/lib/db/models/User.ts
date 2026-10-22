@@ -1,5 +1,7 @@
 import mongoose, { Schema, Document, Model } from "mongoose";
 
+export type UserRole = "patient" | "doctor" | "laboratory" | "pharmacy" | "admin";
+
 export type VerificationStatus = "PENDING" | "APPROVED" | "REJECTED" | "SUSPENDED";
 
 export interface IVerificationHistory {

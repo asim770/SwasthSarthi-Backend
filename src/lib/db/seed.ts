@@ -5,6 +5,8 @@ import { ConsentArtifact } from "./models/ConsentArtifact";
 import { LabOrder } from "./models/LabOrder";
 import { Prescription } from "./models/Prescription";
 import { SourceInstitutionRecord } from "./models/SourceInstitutionRecord";
+import { Facility } from "./models/Facility";
+import { logAuditEvent } from "@/lib/dal/audit";
 
 export const DEMO_IDENTITIES = [
   {
@@ -640,6 +642,97 @@ export async function seedDemoIdentities(): Promise<void> {
       const exists = await SourceInstitutionRecord.findOne({ recordId: src.recordId });
       if (!exists) {
         await SourceInstitutionRecord.create(src);
+      }
+    }
+
+    // 8. Seed initial verified facilities for Step 9 Onboarding
+    const adminUser = await User.findOne({ role: "admin" });
+    if (adminUser) {
+      const demoFacilities = [
+        {
+          facilityId: "IN0710000001",
+          name: "Max Super Speciality Hospital, Saket",
+          type: "HOSPITAL" as const,
+          status: "APPROVED" as const,
+          city: "New Delhi",
+          state: "Delhi",
+          contactPhone: "+91-11-26515050",
+          contactEmail: "admin@maxhealth.demo",
+          demoHfrId: "IN0710000001",
+          registeredBy: adminUser._id,
+          registeredByName: adminUser.name,
+          verifiedBy: adminUser._id,
+          verifiedByName: adminUser.name,
+          verifiedAt: new Date(),
+        },
+        {
+          facilityId: "IN2910000002",
+          name: "Apollo Clinics, Indiranagar",
+          type: "CLINIC" as const,
+          status: "APPROVED" as const,
+          city: "Bengaluru",
+          state: "Karnataka",
+          contactPhone: "+91-80-25219900",
+          contactEmail: "blr.indiranagar@apollo.demo",
+          demoHfrId: "IN2910000002",
+          registeredBy: adminUser._id,
+          registeredByName: adminUser.name,
+          verifiedBy: adminUser._id,
+          verifiedByName: adminUser.name,
+          verifiedAt: new Date(),
+        },
+        {
+          facilityId: "IN3610000003",
+          name: "Apollo Health City",
+          type: "PHARMACY" as const,
+          status: "APPROVED" as const,
+          city: "Hyderabad",
+          state: "Telangana",
+          contactPhone: "+91-40-23607777",
+          contactEmail: "pharmacy@apollohealth.demo",
+          demoHfrId: "IN3610000003",
+          registeredBy: adminUser._id,
+          registeredByName: adminUser.name,
+          verifiedBy: adminUser._id,
+          verifiedByName: adminUser.name,
+          verifiedAt: new Date(),
+        },
+        {
+          facilityId: "IN0710000004",
+          name: "Dr. Lal PathLabs, Delhi Central",
+          type: "LABORATORY" as const,
+          status: "APPROVED" as const,
+          city: "New Delhi",
+          state: "Delhi",
+          contactPhone: "+91-11-39885050",
+          contactEmail: "central.lab@drlal.demo",
+          demoHfrId: "IN0710000004",
+          registeredBy: adminUser._id,
+          registeredByName: adminUser.name,
+          verifiedBy: adminUser._id,
+          verifiedByName: adminUser.name,
+          verifiedAt: new Date(),
+        },
+        {
+          facilityId: "IN0710000099",
+          name: "Sunrise Community Diagnostic Centre",
+          type: "LABORATORY" as const,
+          status: "PENDING" as const,
+          city: "New Delhi",
+          state: "Delhi",
+          contactPhone: "+91-11-45009911",
+          contactEmail: "onboarding@sunriselab.demo",
+          demoHfrId: "IN0710000099",
+          registeredBy: adminUser._id,
+          registeredByName: adminUser.name,
+        },
+      ];
+
+      for (const fac of demoFacilities) {
+        const facExists = await Facility.findOne({ facilityId: fac.facilityId });
+        if (!facExists) {
+          await Facility.create(fac);
+        }
       }
     }
   }

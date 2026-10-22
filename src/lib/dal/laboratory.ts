@@ -18,6 +18,8 @@ import {
 } from "./policies";
 import { assertSafeQueryInput, assertSafeIdentifier } from "./sanitizer";
 import { logAuditEvent } from "./audit";
+import { assertFacilityApproved } from "./onboarding";
+import { createNotification } from "./notifications";
 import { connectToDatabase } from "@/lib/db/connect";
 import { validateFhirResource } from "@/lib/fhir/validator";
 
@@ -324,6 +326,7 @@ export async function submitDiagnosticReport(
 
   // Enforce facility boundary: lab can only submit for orders assigned to their facility
   assertFacilityMembership(principal, order.targetFacility);
+  await assertFacilityApproved(order.targetFacility);
 
   if (order.status === "COMPLETED") {
     throw new InvalidQueryError("Diagnostic report has already been completed for this order.");
@@ -536,6 +539,19 @@ export async function submitDiagnosticReport(
       observationsCount: observationResults.length,
     },
   });
+
+  // Notify patient that a diagnostic report is ready (safe clinical summary without lab values)
+  await createNotification({
+    recipientId: order.patientId,
+    recipientAbha: order.patientAbha,
+    recipientRole: "patient",
+    category: "LAB_REPORT",
+    title: "Diagnostic Report Available",
+    message: `A new laboratory diagnostic report for '${order.testName}' has been finalized by ${facility}.`,
+    relatedResourceId: reportRecordId,
+    relatedResourceType: "DiagnosticReport",
+    idempotencyKey: `notif-lab-${order.orderId}`,
+  }).catch(() => {});
 
   return {
     order,

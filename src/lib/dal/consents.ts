@@ -15,6 +15,7 @@ import {
 import { requireAllowedRole } from "./policies";
 import { assertSafeQueryInput, assertSafeIdentifier } from "./sanitizer";
 import { logAuditEvent } from "./audit";
+import { createNotification } from "./notifications";
 import { connectToDatabase } from "@/lib/db/connect";
 
 export const VALID_HI_TYPES = [
@@ -329,6 +330,19 @@ export async function createConsentRequest(
     },
   });
 
+  // Notify patient of new incoming consent request
+  await createNotification({
+    recipientId: patient._id,
+    recipientAbha: patient.abhaAddress,
+    recipientRole: "patient",
+    category: "CONSENT",
+    title: "New Health Data Consent Request",
+    message: `Dr. ${principal.name} has requested access to your health records for ${input.purpose.trim()}.`,
+    relatedResourceId: consent.consentId,
+    relatedResourceType: "ConsentArtifact",
+    idempotencyKey: `notif-consent-req-${consent.consentId}`,
+  }).catch(() => {});
+
   return consent;
 }
 
@@ -447,6 +461,22 @@ export async function approveConsent(
       approvedHiTypes: approvedTypes,
     },
   });
+
+  // Notify requesting doctor of approval
+  const requestingDoc = await User.findById(consent.requesterDoctorId);
+  if (requestingDoc) {
+    await createNotification({
+      recipientId: requestingDoc._id,
+      recipientAbha: requestingDoc.abhaAddress,
+      recipientRole: "doctor",
+      category: "CONSENT",
+      title: "Consent Request Approved",
+      message: `Patient ${principal.name} approved your access request for ${consent.purpose}.`,
+      relatedResourceId: consent.consentId,
+      relatedResourceType: "ConsentArtifact",
+      idempotencyKey: `notif-consent-appr-${consent.consentId}`,
+    }).catch(() => {});
+  }
 
   return updatedConsent;
 }

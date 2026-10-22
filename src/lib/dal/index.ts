@@ -11,3 +11,5 @@ export * from "./pharmacy";
 export * from "./admin";
 export * from "./handler";
 export * from "./abdmTransfer";
+export * from "./onboarding";
+export * from "./notifications";

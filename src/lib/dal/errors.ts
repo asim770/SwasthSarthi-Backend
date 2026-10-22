@@ -54,3 +54,18 @@ export class InvalidStateTransitionError extends AuthorizationError {
     this.name = "InvalidStateTransitionError";
   }
 }
+
+export class ValidationError extends AuthorizationError {
+  constructor(message = "Validation failed for supplied input.") {
+    super(message, 400, "VALIDATION_ERROR");
+    this.name = "ValidationError";
+  }
+}
+
+export class ConflictError extends AuthorizationError {
+  constructor(message = "Resource already exists or conflicting state detected.") {
+    super(message, 409, "CONFLICT");
+    this.name = "ConflictError";
+  }
+}
+

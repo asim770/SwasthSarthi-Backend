@@ -122,7 +122,6 @@ const AuditLogSchema = new Schema<IAuditLog>(
 
 AuditLogSchema.index({ timestamp: -1 });
 AuditLogSchema.index({ principalId: 1, timestamp: -1 });
-AuditLogSchema.index({ sequenceNumber: 1 });
 AuditLogSchema.index({ targetPatientId: 1, timestamp: -1 });
 
 // Strictly prevent application-level mutations and deletions to enforce append-only security
