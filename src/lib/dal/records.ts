@@ -13,6 +13,7 @@ import { assertSafeQueryInput, assertSafeIdentifier } from "./sanitizer";
 import { evaluateConsent } from "./consents";
 import { logAuditEvent } from "./audit";
 import { connectToDatabase } from "@/lib/db/connect";
+import { resolvePatientUser } from "./patients";
 
 export interface RecordQueryFilter {
   resourceType?: string;
@@ -43,9 +44,9 @@ export async function getHealthRecordsForPatient(
   assertSafeQueryInput(filter);
   await connectToDatabase();
 
-  if (!mongoose.isValidObjectId(patientId)) {
-    throw new InvalidQueryError("Invalid patient identifier format.");
-  }
+  const patient = await resolvePatientUser(patientId);
+  const patientObjectId = patient._id as mongoose.Types.ObjectId;
+  const targetPatientId = patientObjectId.toString();
 
   // 1. Strictly block Laboratory and Pharmacy from general longitudinal record browsing
   if (principal.role === "laboratory" || principal.role === "pharmacy") {
@@ -64,12 +65,16 @@ export async function getHealthRecordsForPatient(
 
   // 2. Patient Role: Strict ownership check
   if (principal.role === "patient") {
-    if (principal.id !== patientId) {
+    const isOwner =
+      principal.id === targetPatientId ||
+      (principal.patientId && principal.patientId === patient.patientId);
+
+    if (!isOwner) {
       await logAuditEvent({
         action: "READ_CLINICAL_RECORDS_DENIED",
         principal,
         targetResourceType: "HealthRecord",
-        targetPatientId: patientId,
+        targetPatientId,
         outcome: "DENIED",
         denialReason: "IDOR Attempt: Patient tried to access another patient's medical records",
       });
@@ -77,7 +82,7 @@ export async function getHealthRecordsForPatient(
     }
 
     const query: Record<string, unknown> = {
-      patientId: new mongoose.Types.ObjectId(patientId),
+      patientId: patientObjectId,
     };
     if (filter?.resourceType) {
       query.resourceType = filter.resourceType;
@@ -89,7 +94,7 @@ export async function getHealthRecordsForPatient(
       action: "READ_CLINICAL_RECORDS",
       principal,
       targetResourceType: "HealthRecord",
-      targetPatientId: patientId,
+      targetPatientId,
       outcome: "ALLOWED",
       metadata: { recordsCount: records.length },
     });
@@ -101,7 +106,7 @@ export async function getHealthRecordsForPatient(
   if (principal.role === "doctor") {
     const now = new Date();
     const activeConsents = await ConsentArtifact.find({
-      patientId: new mongoose.Types.ObjectId(patientId),
+      patientId: patientObjectId,
       requesterDoctorId: new mongoose.Types.ObjectId(principal.id),
       status: { $in: ["APPROVED", "GRANTED"] },
       expiresAt: { $gt: now },
@@ -112,7 +117,7 @@ export async function getHealthRecordsForPatient(
         action: "READ_CLINICAL_RECORDS_DENIED",
         principal,
         targetResourceType: "HealthRecord",
-        targetPatientId: patientId,
+        targetPatientId,
         outcome: "DENIED",
         denialReason: "No active, valid electronic consent found for this patient and doctor",
       });
@@ -146,7 +151,7 @@ export async function getHealthRecordsForPatient(
         action: "READ_CLINICAL_RECORDS_DENIED",
         principal,
         targetResourceType: "HealthRecord",
-        targetPatientId: patientId,
+        targetPatientId,
         outcome: "DENIED",
         denialReason: `Requested resourceType '${filter.resourceType}' is not within active consent hiTypes`,
       });
@@ -157,7 +162,7 @@ export async function getHealthRecordsForPatient(
 
     // Build consent-constrained query
     const query: Record<string, unknown> = {
-      patientId: new mongoose.Types.ObjectId(patientId),
+      patientId: patientObjectId,
       resourceType: filter?.resourceType
         ? filter.resourceType
         : { $in: Array.from(allowedHiTypes) },
@@ -176,7 +181,7 @@ export async function getHealthRecordsForPatient(
       action: "READ_CLINICAL_RECORDS",
       principal,
       targetResourceType: "HealthRecord",
-      targetPatientId: patientId,
+      targetPatientId,
       outcome: "ALLOWED",
       metadata: {
         recordsCount: records.length,
@@ -273,19 +278,24 @@ export async function createHealthRecord(
   assertSafeQueryInput(input);
   await connectToDatabase();
 
-  if (!mongoose.isValidObjectId(input.patientId)) {
-    throw new InvalidQueryError("Invalid patient identifier format.");
-  }
+  const patient = await resolvePatientUser(input.patientId);
+  const patientObjectId = patient._id as mongoose.Types.ObjectId;
+  const targetPatientId = patientObjectId.toString();
 
   // If patient: can only create for self
-  if (principal.role === "patient" && principal.id !== input.patientId) {
-    throw new ForbiddenError("Patients may only upload records to their own profile.");
+  if (principal.role === "patient") {
+    const isOwner =
+      principal.id === targetPatientId ||
+      (principal.patientId && principal.patientId === patient.patientId);
+    if (!isOwner) {
+      throw new ForbiddenError("Patients may only upload records to their own profile.");
+    }
   }
 
   // If doctor: must have active consent to append records or create encounter
   if (principal.role === "doctor") {
     const evaluation = await evaluateConsent(
-      input.patientId,
+      targetPatientId,
       principal.id,
       input.resourceType
     );
@@ -300,7 +310,7 @@ export async function createHealthRecord(
 
   const record = await HealthRecord.create({
     recordId,
-    patientId: new mongoose.Types.ObjectId(input.patientId),
+    patientId: patientObjectId,
     title: input.title.trim(),
     resourceType: input.resourceType,
     date: new Date(input.date),

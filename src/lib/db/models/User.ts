@@ -14,6 +14,8 @@ export interface IVerificationHistory {
 }
 
 export interface IUser extends Document {
+  patientId?: string;
+  passwordHash?: string;
   abhaId: string;
   abhaAddress: string;
   name: string;
@@ -33,6 +35,14 @@ export interface IUser extends Document {
   verifiedByName?: string;
   statusReason?: string;
   verificationHistory: IVerificationHistory[];
+  isPhoneVerified?: boolean;
+  isEmailVerified?: boolean;
+  phoneVerifiedAt?: Date;
+  emailVerifiedAt?: Date;
+  googleSubject?: string;
+  authProviders?: string[];
+  accountStatus?: "active" | "pending_verification" | "suspended";
+  lastLoginAt?: Date;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -71,6 +81,17 @@ const VerificationHistorySchema = new Schema<IVerificationHistory>(
 
 const UserSchema = new Schema<IUser>(
   {
+    patientId: {
+      type: String,
+      unique: true,
+      sparse: true,
+      trim: true,
+      index: true,
+    },
+    passwordHash: {
+      type: String,
+      select: false,
+    },
     abhaId: {
       type: String,
       required: true,
@@ -111,6 +132,42 @@ const UserSchema = new Schema<IUser>(
       type: String,
       trim: true,
       lowercase: true,
+      sparse: true,
+      unique: true,
+      index: true,
+    },
+    isPhoneVerified: {
+      type: Boolean,
+      default: false,
+    },
+    isEmailVerified: {
+      type: Boolean,
+      default: false,
+    },
+    phoneVerifiedAt: {
+      type: Date,
+    },
+    emailVerifiedAt: {
+      type: Date,
+    },
+    googleSubject: {
+      type: String,
+      unique: true,
+      sparse: true,
+      index: true,
+    },
+    authProviders: {
+      type: [String],
+      default: ["password"],
+    },
+    accountStatus: {
+      type: String,
+      enum: ["active", "pending_verification", "suspended"],
+      default: "active",
+      index: true,
+    },
+    lastLoginAt: {
+      type: Date,
     },
     gender: {
       type: String,

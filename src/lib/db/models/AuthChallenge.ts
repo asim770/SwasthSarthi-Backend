@@ -1,10 +1,17 @@
 import mongoose, { Schema, Document, Model } from "mongoose";
 
 export type ChallengeStatus = "PENDING" | "CONSUMED" | "EXPIRED" | "EXHAUSTED";
+export type ChallengeChannel = "sms" | "email" | "mock";
 
 export interface IAuthChallenge extends Document {
   challengeId: string;
   identifier: string;
+  channel: ChallengeChannel;
+  destination: string;
+  maskedDestination: string;
+  purpose: string;
+  transactionId?: string;
+  resendCooldownUntil?: Date;
   userId?: mongoose.Types.ObjectId;
   otpHash: string;
   devOtp?: string;
@@ -31,6 +38,40 @@ const AuthChallengeSchema = new Schema<IAuthChallenge>(
       lowercase: true,
       trim: true,
       index: true,
+    },
+    channel: {
+      type: String,
+      enum: ["sms", "email", "mock"],
+      default: "mock",
+      required: true,
+      index: true,
+    },
+    destination: {
+      type: String,
+      default: function (this: IAuthChallenge) {
+        return this.identifier;
+      },
+      trim: true,
+    },
+    maskedDestination: {
+      type: String,
+      default: function (this: IAuthChallenge) {
+        return this.identifier;
+      },
+      trim: true,
+    },
+    purpose: {
+      type: String,
+      default: "LOGIN_VERIFICATION",
+      required: true,
+      index: true,
+    },
+    transactionId: {
+      type: String,
+      index: true,
+    },
+    resendCooldownUntil: {
+      type: Date,
     },
     userId: {
       type: Schema.Types.ObjectId,

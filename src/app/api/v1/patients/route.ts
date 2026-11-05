@@ -10,7 +10,9 @@ export async function OPTIONS(request: NextRequest): Promise<NextResponse> {
 export async function GET(request: NextRequest): Promise<NextResponse> {
   try {
     const principal = await requireAuthenticatedUser(request);
-    const patients = await listDiscoverablePatients(principal);
+    const searchParams = request.nextUrl.searchParams;
+    const query = searchParams.get("query") || searchParams.get("search") || undefined;
+    const patients = await listDiscoverablePatients(principal, query);
     return apiSuccess(patients, request, { status: 200 });
   } catch (err) {
     return handleDalError(err, request);

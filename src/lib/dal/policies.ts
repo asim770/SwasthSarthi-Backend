@@ -35,6 +35,7 @@ export async function requireAuthenticatedUser(
 
   return {
     id: result.user._id.toString(),
+    patientId: result.user.patientId,
     abhaId: result.user.abhaId,
     abhaAddress: result.user.abhaAddress,
     name: result.user.name,

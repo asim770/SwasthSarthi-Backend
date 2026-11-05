@@ -2,6 +2,7 @@ import { UserRole } from "@/lib/db/models/User";
 
 export interface AuthenticatedPrincipal {
   id: string;
+  patientId?: string;
   abhaId: string;
   abhaAddress: string;
   name: string;

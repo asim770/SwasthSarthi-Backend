@@ -18,6 +18,36 @@ export interface UpdatePatientProfileInput {
 }
 
 /**
+ * Resolve a patient document by MongoDB _id, unique patientId, abhaAddress, or abhaId
+ */
+export async function resolvePatientUser(identifier: string): Promise<IUser> {
+  assertSafeIdentifier(identifier, "patientIdentifier");
+  await connectToDatabase();
+
+  let patient: IUser | null = null;
+  if (mongoose.isValidObjectId(identifier)) {
+    patient = await User.findById(identifier);
+  }
+  if (!patient) {
+    patient = await User.findOne({
+      $or: [
+        { patientId: identifier },
+        { patientId: identifier.toUpperCase() },
+        { abhaAddress: identifier.toLowerCase() },
+        { abhaId: identifier },
+        { email: identifier.toLowerCase() },
+      ],
+    });
+  }
+
+  if (!patient || patient.role !== "patient") {
+    throw new NotFoundError(`Patient record not found for identifier '${identifier}'.`);
+  }
+
+  return patient;
+}
+
+/**
  * Retrieve patient demographic profile enforcing ownership and authorized discovery
  */
 export async function getPatientProfile(
@@ -27,13 +57,15 @@ export async function getPatientProfile(
   assertSafeIdentifier(targetPatientId, "targetPatientId");
   await connectToDatabase();
 
-  if (!mongoose.isValidObjectId(targetPatientId)) {
-    throw new InvalidQueryError("Invalid patient identifier format.");
-  }
+  const patient = await resolvePatientUser(targetPatientId);
 
   // 1. Patient role: strict ownership assertion
   if (principal.role === "patient") {
-    if (principal.id !== targetPatientId) {
+    const isOwner =
+      principal.id === patient._id.toString() ||
+      (principal.patientId && principal.patientId === patient.patientId);
+
+    if (!isOwner) {
       await logAuditEvent({
         action: "READ_PATIENT_PROFILE_DENIED",
         principal,
@@ -44,12 +76,6 @@ export async function getPatientProfile(
       });
       throw new ForbiddenError("Access denied. You are only permitted to access your own patient profile.");
     }
-  }
-
-  // 2. Admin role: administrative metadata only
-  const patient = await User.findById(targetPatientId);
-  if (!patient || patient.role !== "patient") {
-    throw new NotFoundError("Patient record not found.");
   }
 
   await logAuditEvent({
@@ -65,6 +91,7 @@ export async function getPatientProfile(
   if (principal.role === "admin") {
     return {
       _id: patient._id,
+      patientId: patient.patientId,
       abhaId: patient.abhaId,
       abhaAddress: patient.abhaAddress,
       name: patient.name,
@@ -78,6 +105,7 @@ export async function getPatientProfile(
     // Minimum necessary for specimen/dispensation intake
     return {
       _id: patient._id,
+      patientId: patient.patientId,
       abhaId: patient.abhaId,
       abhaAddress: patient.abhaAddress,
       name: patient.name,
@@ -89,6 +117,7 @@ export async function getPatientProfile(
   // Patient self or treating Doctor
   return {
     _id: patient._id,
+    patientId: patient.patientId,
     abhaId: patient.abhaId,
     abhaAddress: patient.abhaAddress,
     name: patient.name,
@@ -107,7 +136,8 @@ export async function getPatientProfile(
  * List discoverable patients for authorized healthcare providers (Doctor)
  */
 export async function listDiscoverablePatients(
-  principal: AuthenticatedPrincipal
+  principal: AuthenticatedPrincipal,
+  queryFilter?: string
 ): Promise<Partial<IUser>[]> {
   await connectToDatabase();
 
@@ -115,14 +145,30 @@ export async function listDiscoverablePatients(
     throw new ForbiddenError("Only registered healthcare practitioners may search patient registries.");
   }
 
-  const patients = await User.find({ role: "patient", isActive: true })
-    .select("_id name abhaId abhaAddress gender dateOfBirth phone")
+  const query: Record<string, unknown> = { role: "patient", isActive: true };
+  if (queryFilter && queryFilter.trim()) {
+    const q = queryFilter.trim();
+    assertSafeQueryInput(q);
+    query.$or = [
+      { patientId: { $regex: q, $options: "i" } },
+      { name: { $regex: q, $options: "i" } },
+      { abhaAddress: { $regex: q, $options: "i" } },
+      { abhaId: { $regex: q, $options: "i" } },
+      { email: { $regex: q, $options: "i" } },
+      { phone: { $regex: q, $options: "i" } },
+    ];
+  }
+
+  const patients = await User.find(query)
+    .select("_id patientId name abhaId abhaAddress gender dateOfBirth phone email")
     .limit(20);
 
   return patients.map((p) => ({
     id: p._id.toString(),
     _id: p._id,
+    patientId: p.patientId,
     name: p.name,
+    email: p.email,
     abhaId: p.abhaId,
     abhaAddress: p.abhaAddress,
     gender: p.gender,
@@ -143,8 +189,15 @@ export async function updatePatientProfile(
   assertSafeQueryInput(input);
   await connectToDatabase();
 
+  const patient = await resolvePatientUser(targetPatientId);
+
   // Strict ownership: only the patient themselves can update their profile
-  if (principal.role !== "patient" || principal.id !== targetPatientId) {
+  const isOwner =
+    principal.role === "patient" &&
+    (principal.id === patient._id.toString() ||
+      (principal.patientId && principal.patientId === patient.patientId));
+
+  if (!isOwner) {
     await logAuditEvent({
       action: "UPDATE_PATIENT_PROFILE_DENIED",
       principal,
@@ -164,10 +217,10 @@ export async function updatePatientProfile(
   if (input.dateOfBirth !== undefined) allowedUpdates.dateOfBirth = input.dateOfBirth;
 
   const updatedPatient = await User.findByIdAndUpdate(
-    targetPatientId,
+    patient._id,
     { $set: allowedUpdates },
     { returnDocument: "after" }
-  ).select("_id abhaId abhaAddress name role isActive phone email gender dateOfBirth");
+  ).select("_id patientId abhaId abhaAddress name role isActive phone email gender dateOfBirth");
 
   if (!updatedPatient) {
     throw new NotFoundError("Patient not found.");
@@ -184,3 +237,4 @@ export async function updatePatientProfile(
 
   return updatedPatient;
 }
+

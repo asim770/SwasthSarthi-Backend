@@ -26,6 +26,7 @@ export async function GET(request: NextRequest) {
       authenticated: true,
       user: {
         id: result.user._id.toString(),
+        patientId: result.user.patientId,
         name: result.user.name,
         role: result.user.role,
         abhaAddress: result.user.abhaAddress,

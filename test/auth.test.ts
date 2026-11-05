@@ -37,6 +37,18 @@ import { POST as verifyHandler } from "@/app/api/v1/auth/verify/route";
 import { GET as meHandler } from "@/app/api/v1/auth/me/route";
 import { POST as logoutHandler } from "@/app/api/v1/auth/logout/route";
 import { GET as mockOtpHandler } from "@/app/api/v1/auth/mock-otp/route";
+import { GET as channelsHandler } from "@/app/api/v1/auth/channels/route";
+import {
+  ResendEmailProvider,
+  Msg91SmsProvider,
+  MockOtpDeliveryProvider,
+  otpChallengeService,
+  normalizePhoneNumber,
+  maskPhoneNumber,
+  maskEmailAddress,
+  maskIdentifier,
+} from "@/lib/auth/otp";
+import { verifyAuditChainIntegrity, logAuditEvent } from "@/lib/dal/audit";
 import { NextRequest } from "next/server";
 
 describe("SwasthSaarthi — Step 4: Authentication & Session Security Suite", () => {
@@ -492,4 +504,509 @@ describe("SwasthSaarthi — Step 4: Authentication & Session Security Suite", ()
       (process.env as Record<string, string | undefined>).NODE_ENV = originalEnv;
     }
   });
+
+  // 1. Normalization & Masking
+  test("15. Phone and email normalization and masking protect PII", () => {
+    const norm1 = normalizePhoneNumber("+91 98765 43210");
+    assert.equal(norm1.isValid, true);
+    assert.equal(norm1.e164, "+919876543210");
+    assert.equal(norm1.digitsOnly, "919876543210");
+
+    const norm2 = normalizePhoneNumber("9876543210");
+    assert.equal(norm2.isValid, true);
+    assert.equal(norm2.e164, "+919876543210");
+    assert.equal(norm2.digitsOnly, "919876543210");
+
+    const invalidPhone = normalizePhoneNumber("12345");
+    assert.equal(invalidPhone.isValid, false);
+
+    const maskedPhone = maskPhoneNumber("+919876543210");
+    assert.ok(!maskedPhone.includes("9876543210"));
+    assert.ok(maskedPhone.includes("****"));
+
+    const maskedEmail = maskEmailAddress("rahul.verma@example.com");
+    assert.ok(!maskedEmail.includes("rahul.verma"));
+    assert.match(maskedEmail, /^r\*+a@example\.com$/);
+
+    const maskedId = maskIdentifier("rahul.verma@sbx");
+    assert.ok(!maskedId.includes("rahul.verma"));
+    assert.ok(maskedId.includes("@sbx"));
+
+    const maskedAbha = maskIdentifier("32-8492-1920-4491");
+    assert.equal(maskedAbha, "32-****-****-4491");
+  });
+
+  // 2. Resend Email Delivery Provider Adapter Unit Tests
+  test("16. ResendEmailProvider sends verified payload and handles API success", async () => {
+    let capturedUrl = "";
+    let capturedHeaders: Record<string, string> = {};
+    let capturedBody: any = null;
+
+    const mockFetcher: typeof fetch = async (input, init) => {
+      capturedUrl = String(input);
+      capturedHeaders = init?.headers as Record<string, string>;
+      capturedBody = JSON.parse(String(init?.body));
+
+      return new Response(JSON.stringify({ id: "resend_msg_test_123" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+
+    const provider = new ResendEmailProvider({
+      apiKey: "re_test_key_valid",
+      fromEmail: "onboarding@resend.dev",
+      fetcher: mockFetcher,
+    });
+
+    assert.equal(provider.isConfigured(), true);
+
+    const result = await provider.sendOtp({
+      destination: "patient@example.com",
+      otp: "654321",
+      ttlSeconds: 300,
+      maskedDestination: "p***t@example.com",
+      userName: "Rahul Verma",
+    });
+
+    assert.equal(result.success, true);
+    assert.equal(result.messageId, "resend_msg_test_123");
+    assert.equal(result.channel, "email");
+    assert.equal(capturedUrl, "https://api.resend.com/emails");
+    assert.equal(capturedHeaders.Authorization, "Bearer re_test_key_valid");
+    assert.deepEqual(capturedBody.to, ["patient@example.com"]);
+    assert.equal(capturedBody.from, "onboarding@resend.dev");
+    assert.ok(capturedBody.text.includes("654321"));
+    assert.ok(capturedBody.html.includes("654321"));
+    assert.ok(capturedBody.html.includes("SwasthSaarthi"));
+  });
+
+  test("17. ResendEmailProvider handles errors and timeouts gracefully without exposing keys", async () => {
+    const unauthorizedFetcher: typeof fetch = async () => {
+      return new Response(
+        JSON.stringify({ message: "API key is invalid", name: "validation_error" }),
+        { status: 401, headers: { "Content-Type": "application/json" } }
+      );
+    };
+
+    const provider401 = new ResendEmailProvider({
+      apiKey: "re_invalid",
+      fetcher: unauthorizedFetcher,
+    });
+
+    const res401 = await provider401.sendOtp({
+      destination: "patient@example.com",
+      otp: "123456",
+      ttlSeconds: 300,
+      maskedDestination: "p***t@example.com",
+    });
+
+    assert.equal(res401.success, false);
+    assert.ok(res401.error?.includes("Resend delivery failed"));
+    assert.ok(!res401.error?.includes("re_invalid"));
+
+    const timeoutFetcher: typeof fetch = async () => {
+      const err = new Error("Request timed out");
+      err.name = "TimeoutError";
+      throw err;
+    };
+
+    const providerTimeout = new ResendEmailProvider({
+      apiKey: "re_test",
+      fetcher: timeoutFetcher,
+    });
+
+    const resTimeout = await providerTimeout.sendOtp({
+      destination: "patient@example.com",
+      otp: "123456",
+      ttlSeconds: 300,
+      maskedDestination: "p***t@example.com",
+    });
+
+    assert.equal(resTimeout.success, false);
+    assert.ok(resTimeout.error?.includes("timed out"));
+  });
+
+  test("18. ResendEmailProvider fails safely when unconfigured", async () => {
+    const unconfigured = new ResendEmailProvider({ apiKey: "" });
+    assert.equal(unconfigured.isConfigured(), false);
+
+    const res = await unconfigured.sendOtp({
+      destination: "test@example.com",
+      otp: "111111",
+      ttlSeconds: 300,
+      maskedDestination: "t***t@example.com",
+    });
+
+    assert.equal(res.success, false);
+    assert.ok(res.error?.includes("not configured"));
+  });
+
+  // 3. MSG91 SMS Delivery Provider Adapter Unit Tests
+  test("19. Msg91SmsProvider dispatches international formatted phone and OTP", async () => {
+    let capturedUrl = "";
+    let capturedHeaders: Record<string, string> = {};
+    let capturedBody: any = null;
+
+    const mockFetcher: typeof fetch = async (input, init) => {
+      capturedUrl = String(input);
+      capturedHeaders = init?.headers as Record<string, string>;
+      capturedBody = JSON.parse(String(init?.body));
+
+      return new Response(JSON.stringify({ type: "success", message: "msg91_req_884920" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+
+    const provider = new Msg91SmsProvider({
+      authKey: "msg91_secret_auth_key",
+      templateId: "template_swasth_otp",
+      fetcher: mockFetcher,
+    });
+
+    assert.equal(provider.isConfigured(), true);
+
+    const result = await provider.sendOtp({
+      destination: "+91 98765-43210",
+      otp: "987123",
+      ttlSeconds: 300,
+      maskedDestination: "+91-98****4210",
+      userName: "Rahul Verma",
+    });
+
+    assert.equal(result.success, true);
+    assert.equal(result.messageId, "msg91_req_884920");
+    assert.equal(result.channel, "sms");
+
+    const parsedUrl = new URL(capturedUrl);
+    assert.equal(parsedUrl.pathname, "/api/v5/otp");
+    assert.equal(parsedUrl.searchParams.get("template_id"), "template_swasth_otp");
+    assert.equal(parsedUrl.searchParams.get("mobile"), "919876543210");
+    assert.equal(parsedUrl.searchParams.get("otp"), "987123");
+    assert.equal(parsedUrl.searchParams.get("otp_expiry"), "5");
+    assert.equal(capturedHeaders.authkey, "msg91_secret_auth_key");
+    assert.equal(capturedBody.otp, "987123");
+  });
+
+  test("20. Msg91SmsProvider rejects malformed phone and handles provider errors", async () => {
+    const provider = new Msg91SmsProvider({
+      authKey: "valid_key",
+      templateId: "valid_tmpl",
+    });
+
+    const badPhone = await provider.sendOtp({
+      destination: "not-a-number",
+      otp: "123456",
+      ttlSeconds: 300,
+      maskedDestination: "***",
+    });
+    assert.equal(badPhone.success, false);
+    assert.ok(badPhone.error?.includes("Phone number"));
+
+    const errorFetcher: typeof fetch = async () => {
+      return new Response(JSON.stringify({ type: "error", message: "Invalid template ID" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+
+    const providerWithError = new Msg91SmsProvider({
+      authKey: "valid_key",
+      templateId: "bad_tmpl",
+      fetcher: errorFetcher,
+    });
+
+    const errorRes = await providerWithError.sendOtp({
+      destination: "+919876543210",
+      otp: "123456",
+      ttlSeconds: 300,
+      maskedDestination: "+91-98****3210",
+    });
+
+    assert.equal(errorRes.success, false);
+    assert.ok(errorRes.error?.includes("MSG91 error"));
+  });
+
+  test("21. Msg91SmsProvider fails safely when unconfigured", async () => {
+    const unconfigured = new Msg91SmsProvider({ authKey: "", templateId: "" });
+    assert.equal(unconfigured.isConfigured(), false);
+
+    const res = await unconfigured.sendOtp({
+      destination: "+919876543210",
+      otp: "111111",
+      ttlSeconds: 300,
+      maskedDestination: "+91-98****3210",
+    });
+
+    assert.equal(res.success, false);
+    assert.ok(res.error?.includes("not configured"));
+  });
+
+  // 4. End-to-End Multi-Channel OTP Login & Contact Verification Flow
+  test("22. Full Email OTP verification flow establishes session and marks email verified", async () => {
+    let deliveredEmailOtp = "";
+
+    const mockEmailProvider = new ResendEmailProvider({
+      apiKey: "re_mock_test_key",
+      fromEmail: "onboarding@resend.dev",
+      fetcher: async (input, init) => {
+        const body = JSON.parse(String(init?.body));
+        const match = body.text.match(/verification code for SwasthSaarthi is:\s*(\d{6})/);
+        if (match) {
+          deliveredEmailOtp = match[1];
+        }
+        return new Response(JSON.stringify({ id: "resend_test_delivered_1" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      },
+    });
+
+    otpChallengeService.setEmailProvider(mockEmailProvider);
+
+    const challengeReq = new NextRequest("http://localhost:3001/api/v1/auth/challenge", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        identifier: "rahul.verma@sbx",
+        channel: "email",
+        contact: "rahul.verma@testmail.com",
+      }),
+    });
+
+    const challengeRes = await challengeHandler(challengeReq);
+    assert.equal(challengeRes.status, 201);
+    const challengeBody = await challengeRes.json();
+
+    assert.equal(challengeBody.success, true);
+    assert.equal(challengeBody.data.channel, "email");
+    assert.ok(challengeBody.data.challengeId);
+    assert.ok(challengeBody.data.maskedDestination.includes("@testmail.com"));
+    assert.match(deliveredEmailOtp, /^\d{6}$/);
+
+    const storedChallenge = await AuthChallenge.findOne({
+      challengeId: challengeBody.data.challengeId,
+    });
+    assert.ok(storedChallenge);
+    assert.equal(storedChallenge.channel, "email");
+    assert.equal(storedChallenge.devOtp, undefined);
+    assert.ok(storedChallenge.otpHash.length === 64);
+
+    const verifyReq = new NextRequest("http://localhost:3001/api/v1/auth/verify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        challengeId: challengeBody.data.challengeId,
+        otp: deliveredEmailOtp,
+      }),
+    });
+
+    const verifyRes = await verifyHandler(verifyReq);
+    assert.equal(verifyRes.status, 200);
+    const verifyBody = await verifyRes.json();
+
+    assert.equal(verifyBody.success, true);
+    assert.equal(verifyBody.data.contactVerified, true);
+    assert.equal(verifyBody.data.user.isEmailVerified, true);
+    assert.ok(verifyBody.data.csrfToken);
+
+    const user = await User.findOne({ abhaAddress: "rahul.verma@sbx" });
+    assert.equal(user?.isEmailVerified, true);
+    assert.ok(user?.emailVerifiedAt);
+  });
+
+  test("23. Full SMS OTP verification flow establishes session and marks phone verified", async () => {
+    let deliveredSmsOtp = "";
+
+    const mockSmsProvider = new Msg91SmsProvider({
+      authKey: "msg91_mock_auth_key",
+      templateId: "swasth_sms_tmpl",
+      fetcher: async (input) => {
+        const url = new URL(String(input));
+        deliveredSmsOtp = url.searchParams.get("otp") || "";
+        return new Response(JSON.stringify({ type: "success", message: "msg91_test_ok" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      },
+    });
+
+    otpChallengeService.setSmsProvider(mockSmsProvider);
+
+    const challengeReq = new NextRequest("http://localhost:3001/api/v1/auth/challenge", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        identifier: "rahul.verma@sbx",
+        channel: "sms",
+        contact: "+91 98765 43210",
+      }),
+    });
+
+    const challengeRes = await challengeHandler(challengeReq);
+    assert.equal(challengeRes.status, 201);
+    const challengeBody = await challengeRes.json();
+
+    assert.equal(challengeBody.success, true);
+    assert.equal(challengeBody.data.channel, "sms");
+    assert.match(deliveredSmsOtp, /^\d{6}$/);
+
+    const verifyReq = new NextRequest("http://localhost:3001/api/v1/auth/verify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        challengeId: challengeBody.data.challengeId,
+        otp: deliveredSmsOtp,
+      }),
+    });
+
+    const verifyRes = await verifyHandler(verifyReq);
+    assert.equal(verifyRes.status, 200);
+    const verifyBody = await verifyRes.json();
+
+    assert.equal(verifyBody.success, true);
+    assert.equal(verifyBody.data.contactVerified, true);
+    assert.equal(verifyBody.data.user.isPhoneVerified, true);
+
+    const user = await User.findOne({ abhaAddress: "rahul.verma@sbx" });
+    assert.equal(user?.isPhoneVerified, true);
+    assert.ok(user?.phoneVerifiedAt);
+  });
+
+  // 5. Challenge Security & Abuse Prevention
+  test("24. Correct OTP is accepted exactly once; replay attempts are rejected", async () => {
+    const mockProvider = new MockOtpDeliveryProvider();
+    otpChallengeService.setMockProvider(mockProvider);
+
+    const challengeReq = new NextRequest("http://localhost:3001/api/v1/auth/challenge", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ identifier: "rahul.verma@sbx", channel: "mock" }),
+    });
+
+    const challengeRes = await challengeHandler(challengeReq);
+    const challengeBody = await challengeRes.json();
+    const otp = mockProvider.getLastSentOtp();
+
+    const res1 = await verifyHandler(
+      new NextRequest("http://localhost:3001/api/v1/auth/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ challengeId: challengeBody.data.challengeId, otp }),
+      })
+    );
+    assert.equal(res1.status, 200);
+
+    const res2 = await verifyHandler(
+      new NextRequest("http://localhost:3001/api/v1/auth/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ challengeId: challengeBody.data.challengeId, otp }),
+      })
+    );
+    assert.equal(res2.status, 409);
+    const body2 = await res2.json();
+    assert.equal(body2.error.code, "CHALLENGE_ALREADY_CONSUMED");
+  });
+
+  test("25. Resend cooldown enforces cooldown period before new OTP can be requested", async () => {
+    const mockProvider = new MockOtpDeliveryProvider();
+    otpChallengeService.setMockProvider(mockProvider);
+
+    const req1 = new NextRequest("http://localhost:3001/api/v1/auth/challenge", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ identifier: "rahul.verma@sbx", channel: "mock" }),
+    });
+    const res1 = await challengeHandler(req1);
+    assert.equal(res1.status, 201);
+
+    const req2 = new NextRequest("http://localhost:3001/api/v1/auth/challenge", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ identifier: "rahul.verma@sbx", channel: "mock" }),
+    });
+    const res2 = await challengeHandler(req2);
+    assert.equal(res2.status, 429);
+    const body2 = await res2.json();
+    assert.equal(body2.error.code, "RESEND_COOLDOWN_ACTIVE");
+    assert.ok(body2.error.message.includes("wait"));
+  });
+
+  test("26. Provider failure does not silently switch to mock delivery", async () => {
+    const failingResend = new ResendEmailProvider({
+      apiKey: "re_test_failing",
+      fetcher: async () => {
+        return new Response(JSON.stringify({ message: "Resend account suspended" }), {
+          status: 403,
+          headers: { "Content-Type": "application/json" },
+        });
+      },
+    });
+
+    otpChallengeService.setEmailProvider(failingResend);
+
+    const req = new NextRequest("http://localhost:3001/api/v1/auth/challenge", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        identifier: "rahul.verma@sbx",
+        channel: "email",
+        contact: "test@example.com",
+      }),
+    });
+
+    const res = await challengeHandler(req);
+    assert.equal(res.status, 502);
+    const body = await res.json();
+    assert.equal(body.error.code, "PROVIDER_DELIVERY_ERROR");
+  });
+
+  test("27. GET /api/v1/auth/channels returns configured delivery channels", async () => {
+    const req = new NextRequest("http://localhost:3001/api/v1/auth/channels");
+    const res = await channelsHandler(req);
+    assert.equal(res.status, 200);
+    const body = await res.json();
+
+    assert.equal(body.success, true);
+    assert.ok(body.data.channels);
+    assert.equal(body.data.abdmStatus, "SIMULATED_DEMO_ONLY");
+    assert.ok(body.data.channels.some((c: any) => c.id === "email"));
+    assert.ok(body.data.channels.some((c: any) => c.id === "sms"));
+  });
+
+  test("28. Audit chain integrity verifies all security events without secret leakage", async () => {
+    const { AuditLog } = await import("@/lib/db/models/AuditLog");
+    const recentOtpLogs = await AuditLog.find({ action: { $regex: /^AUTH_OTP_/ } }).sort({
+      sequenceNumber: 1,
+    });
+    assert.ok(recentOtpLogs.length > 0);
+
+    for (const log of recentOtpLogs) {
+      const serialized = JSON.stringify(log);
+      assert.ok(!serialized.includes("re_test"));
+      assert.ok(!serialized.includes("msg91_mock"));
+      assert.ok(!serialized.includes("password"));
+    }
+
+    const logA = await logAuditEvent({
+      action: "AUTH_OTP_AUDIT_VERIFY_A",
+      outcome: "ALLOWED",
+      targetResourceType: "AuthChallenge",
+      metadata: { demoMode: true },
+    });
+    const logB = await logAuditEvent({
+      action: "AUTH_OTP_AUDIT_VERIFY_B",
+      outcome: "ALLOWED",
+      targetResourceType: "AuthChallenge",
+      metadata: { demoMode: true },
+    });
+
+    assert.ok(logA && logB);
+    const check = await verifyAuditChainIntegrity(logA.sequenceNumber!, logB.sequenceNumber!);
+    assert.equal(check.valid, true);
+    assert.equal(check.totalVerified, 2);
+  });
 });
+

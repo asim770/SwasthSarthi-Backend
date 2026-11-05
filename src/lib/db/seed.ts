@@ -7,9 +7,11 @@ import { Prescription } from "./models/Prescription";
 import { SourceInstitutionRecord } from "./models/SourceInstitutionRecord";
 import { Facility } from "./models/Facility";
 import { logAuditEvent } from "@/lib/dal/audit";
+import { hashPassword } from "@/lib/security/crypto";
 
 export const DEMO_IDENTITIES = [
   {
+    patientId: "PID-10000001",
     abhaId: "32-8492-1920-4491",
     abhaAddress: "rahul.verma@sbx",
     name: "Rahul Verma",
@@ -66,6 +68,7 @@ export const DEMO_IDENTITIES = [
     abhaAddress: "inactive.user@sbx",
     name: "Inactive Test Account",
     role: "patient" as const,
+    patientId: "PID-99999999",
     isActive: false,
     phone: "+91-9876543299",
     email: "inactive@synthetic.demo",
@@ -78,16 +81,42 @@ export const DEMO_IDENTITIES = [
 export async function seedDemoIdentities(): Promise<void> {
   await connectToDatabase();
 
+  const defaultPasswordHash = await hashPassword("Password123!");
+
   for (const identity of DEMO_IDENTITIES) {
     const existing = await User.findOne({
       $or: [
         { abhaId: identity.abhaId },
         { abhaAddress: identity.abhaAddress.toLowerCase() },
       ],
-    });
+    }).select("+passwordHash");
 
     if (!existing) {
-      await User.create(identity);
+      await User.create({
+        ...identity,
+        ...(identity.role === "patient" ? { passwordHash: defaultPasswordHash } : {}),
+      });
+    } else {
+      let needsSave = false;
+      if (existing.phone !== identity.phone || existing.email !== identity.email) {
+        existing.phone = identity.phone;
+        existing.email = identity.email;
+        needsSave = true;
+      }
+      if (identity.role === "patient") {
+        const targetPid = (identity as { patientId?: string }).patientId;
+        if (!existing.patientId && targetPid) {
+          existing.patientId = targetPid;
+          needsSave = true;
+        }
+        await User.updateOne(
+          { _id: existing._id },
+          { $set: { passwordHash: defaultPasswordHash, isActive: identity.isActive } }
+        );
+      }
+      if (needsSave) {
+        await existing.save();
+      }
     }
   }
 

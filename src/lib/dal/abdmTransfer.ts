@@ -15,6 +15,7 @@ import {
 import { assertDenyAdminClinicalAccess, requireAllowedRole } from "./policies";
 import { assertSafeQueryInput, assertSafeIdentifier } from "./sanitizer";
 import { logAuditEvent } from "./audit";
+import { resolvePatientUser } from "./patients";
 import { mockAbdmAdapter } from "@/lib/abdm/mockAdapter";
 import { dispatchHealthDataTransfer } from "@/lib/queue/transferWorker";
 import { summarizeFhirResource, extractResourceDate } from "@/lib/fhir/summarizer";
@@ -60,11 +61,9 @@ export async function getAuthorizedTimeline(
   assertDenyAdminClinicalAccess(principal, "patient health timeline");
   assertSafeIdentifier(patientId, "patientId");
   assertSafeQueryInput(filter);
-  await connectToDatabase();
-
-  if (!mongoose.isValidObjectId(patientId)) {
-    throw new InvalidQueryError("Invalid patient identifier format.");
-  }
+  const patientUser = await resolvePatientUser(patientId);
+  const patientObjectId = patientUser._id as mongoose.Types.ObjectId;
+  const targetPatientId = patientObjectId.toString();
 
   // Strictly block Laboratory and Pharmacy from browsing general timeline
   if (principal.role === "laboratory" || principal.role === "pharmacy") {
@@ -72,7 +71,7 @@ export async function getAuthorizedTimeline(
       action: "READ_CLINICAL_RECORDS_DENIED",
       principal,
       targetResourceType: "HealthRecord",
-      targetPatientId: patientId,
+      targetPatientId,
       outcome: "DENIED",
       denialReason: `Role '${principal.role}' attempted to browse general longitudinal timeline`,
     });
@@ -81,23 +80,21 @@ export async function getAuthorizedTimeline(
     );
   }
 
-  const patientObjectId = new mongoose.Types.ObjectId(patientId);
-  const patientUser = await User.findById(patientObjectId);
-  if (!patientUser) {
-    throw new NotFoundError("Patient account not found.");
-  }
-
   const now = new Date();
   const timelineItems: TimelineItem[] = [];
 
   // 1. Patient Role: View personal vault records and authorized transferred records
   if (principal.role === "patient") {
-    if (principal.id !== patientId) {
+    const isOwner =
+      principal.id === targetPatientId ||
+      (principal.patientId && principal.patientId === patientUser.patientId);
+
+    if (!isOwner) {
       await logAuditEvent({
         action: "READ_PATIENT_TIMELINE_DENIED",
         principal,
         targetResourceType: "HealthRecord",
-        targetPatientId: patientId,
+        targetPatientId,
         outcome: "DENIED",
         denialReason: "IDOR Attempt: Patient tried to access another patient's timeline",
       });
@@ -495,15 +492,15 @@ export async function getDiscoverableCareContexts(
 ): Promise<DiscoveredCareContext[]> {
   assertDenyAdminClinicalAccess(principal, "care contexts");
   assertSafeIdentifier(patientId, "patientId");
-  await connectToDatabase();
-
-  const patient = await User.findById(patientId);
-  if (!patient) {
-    throw new NotFoundError("Patient account not found.");
-  }
+  const patient = await resolvePatientUser(patientId);
 
   // Authorization check
-  if (principal.role === "patient" && principal.id !== patientId) {
+  const isOwner =
+    principal.role === "patient" &&
+    (principal.id === patient._id.toString() ||
+      (principal.patientId && principal.patientId === patient.patientId));
+
+  if (principal.role === "patient" && !isOwner) {
     throw new ForbiddenError("Patients may only discover their own care contexts.");
   }
 

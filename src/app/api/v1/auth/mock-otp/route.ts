@@ -12,10 +12,14 @@ export async function OPTIONS(request: NextRequest) {
 }
 
 export async function GET(request: NextRequest) {
-  // Hard block in production environment
-  if (process.env.NODE_ENV === "production" || env.NODE_ENV === "production") {
+  // Hard block in production environment or strictly real delivery mode
+  if (
+    process.env.NODE_ENV === "production" ||
+    env.NODE_ENV === "production" ||
+    env.OTP_DELIVERY_MODE === "real"
+  ) {
     return apiError(
-      new Error("Mock OTP inspection is disabled in production."),
+      new Error("Mock OTP inspection is disabled in this environment."),
       request,
       {
         status: 404,
@@ -42,7 +46,11 @@ export async function GET(request: NextRequest) {
   await connectToDatabase();
   const challenge = await AuthChallenge.findOne({ challengeId, status: "PENDING" });
 
-  if (!challenge || !challenge.devOtp) {
+  if (
+    !challenge ||
+    !challenge.devOtp ||
+    (challenge.channel && challenge.channel !== "mock")
+  ) {
     return apiError(
       new Error("No active mock OTP found for this challenge reference."),
       request,

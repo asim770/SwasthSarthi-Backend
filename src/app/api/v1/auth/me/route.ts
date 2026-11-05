@@ -33,6 +33,7 @@ export async function GET(request: NextRequest) {
       {
         user: {
           id: user._id.toString(),
+          patientId: user.patientId,
           abhaId: user.abhaId,
           abhaAddress: user.abhaAddress,
           name: user.name,
@@ -44,6 +45,11 @@ export async function GET(request: NextRequest) {
           email: user.email,
           gender: user.gender,
           dateOfBirth: user.dateOfBirth,
+          authProviders: user.authProviders || ["password"],
+          accountStatus: user.accountStatus || "active",
+          isEmailVerified: user.isEmailVerified || false,
+          isPhoneVerified: user.isPhoneVerified || false,
+          isGoogleLinked: !!user.googleSubject,
         },
         session: {
           expiresAt: session.expiresAt.toISOString(),

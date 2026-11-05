@@ -2,18 +2,17 @@ import { NextRequest } from "next/server";
 import { z } from "zod";
 import { apiSuccess, apiError } from "@/lib/api/response";
 import { handleCorsPreflight } from "@/lib/api/cors";
-import { connectToDatabase } from "@/lib/db/connect";
-import { User } from "@/lib/db/models/User";
-import { AuthChallenge } from "@/lib/db/models/AuthChallenge";
-import { hashOtp } from "@/lib/security/crypto";
-import { checkRateLimit } from "@/lib/security/rateLimiter";
+import { otpChallengeService } from "@/lib/auth/otp";
 import { createSession } from "@/lib/auth/session";
 
 export const dynamic = "force-dynamic";
 
 const verifySchema = z.object({
   challengeId: z.string().min(10, "Invalid challenge ID format").trim(),
-  otp: z.string().length(6, "OTP must be exactly 6 digits").regex(/^\d+$/, "OTP must contain only numbers"),
+  otp: z
+    .string()
+    .length(6, "OTP must be exactly 6 digits")
+    .regex(/^\d+$/, "OTP must contain only numbers"),
 });
 
 export async function OPTIONS(request: NextRequest) {
@@ -22,6 +21,13 @@ export async function OPTIONS(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
+    const clientIp =
+      request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+      request.headers.get("x-real-ip") ||
+      "127.0.0.1";
+
+    const userAgent = request.headers.get("user-agent") || undefined;
+
     const body = await request.json().catch(() => null);
     const parseResult = verifySchema.safeParse(body);
 
@@ -34,169 +40,14 @@ export async function POST(request: NextRequest) {
 
     const { challengeId, otp } = parseResult.data;
 
-    // Rate-limit OTP attempts per challenge: max 5 requests per 5 minutes
-    const limitResult = checkRateLimit(`verify_challenge:${challengeId}`, 5, 300000);
-    if (!limitResult.allowed) {
-      return apiError(
-        new Error(`Too many verification attempts for this challenge. Try again in ${limitResult.resetInSeconds}s.`),
-        request,
-        {
-          status: 429,
-          code: "RATE_LIMIT_EXCEEDED",
-          fallbackMessage: "Rate limit exceeded for challenge verification.",
-        }
-      );
-    }
-
-    await connectToDatabase();
-
-    const now = new Date();
-
-    // Check challenge existence and status before atomic increment
-    const existing = await AuthChallenge.findOne({ challengeId });
-    if (!existing) {
-      return apiError(
-        new Error("Challenge reference does not exist or has expired."),
-        request,
-        {
-          status: 404,
-          code: "CHALLENGE_NOT_FOUND",
-          fallbackMessage: "Invalid challenge reference.",
-        }
-      );
-    }
-
-    if (existing.status === "CONSUMED") {
-      return apiError(
-        new Error("This OTP challenge has already been consumed. Replay is forbidden."),
-        request,
-        {
-          status: 409,
-          code: "CHALLENGE_ALREADY_CONSUMED",
-          fallbackMessage: "This challenge has already been used.",
-        }
-      );
-    }
-
-    if (existing.status === "EXHAUSTED" || existing.attempts >= existing.maxAttempts) {
-      return apiError(
-        new Error("Maximum verification attempts exceeded. Challenge is locked."),
-        request,
-        {
-          status: 403,
-          code: "CHALLENGE_EXHAUSTED",
-          fallbackMessage: "Too many failed attempts. Please request a new OTP.",
-        }
-      );
-    }
-
-    if (existing.expiresAt <= now || existing.status === "EXPIRED") {
-      existing.status = "EXPIRED";
-      await existing.save();
-      return apiError(
-        new Error("The OTP challenge has expired. Please request a new one."),
-        request,
-        {
-          status: 410,
-          code: "CHALLENGE_EXPIRED",
-          fallbackMessage: "Challenge expired.",
-        }
-      );
-    }
-
-    // Atomic increment of attempt counter
-    const challenge = await AuthChallenge.findOneAndUpdate(
-      {
+    // Verify OTP challenge with atomic attempt counting and constant-time check
+    const { user, challenge, contactVerified } =
+      await otpChallengeService.verifyChallenge({
         challengeId,
-        status: "PENDING",
-        attempts: { $lt: existing.maxAttempts },
-        expiresAt: { $gt: now },
-      },
-      {
-        $inc: { attempts: 1 },
-      },
-      { returnDocument: "after" }
-    );
-
-    if (!challenge) {
-      return apiError(
-        new Error("Challenge is no longer valid or is being processed concurrently."),
-        request,
-        {
-          status: 409,
-          code: "CHALLENGE_CONCURRENT_CONFLICT",
-          fallbackMessage: "Conflict during challenge verification.",
-        }
-      );
-    }
-
-    // Compare cryptographic OTP hash
-    const computedHash = hashOtp(otp, challengeId);
-    if (computedHash !== challenge.otpHash) {
-      const attemptsLeft = challenge.maxAttempts - challenge.attempts;
-
-      if (challenge.attempts >= challenge.maxAttempts) {
-        challenge.status = "EXHAUSTED";
-        await challenge.save();
-        return apiError(
-          new Error("Incorrect OTP. All verification attempts exhausted."),
-          request,
-          {
-            status: 403,
-            code: "CHALLENGE_EXHAUSTED",
-            fallbackMessage: "Maximum attempts exceeded.",
-          }
-        );
-      }
-
-      return apiError(
-        new Error(`Incorrect OTP. ${attemptsLeft} attempt(s) remaining.`),
-        request,
-        {
-          status: 401,
-          code: "INVALID_OTP",
-          fallbackMessage: `Incorrect verification code. ${attemptsLeft} attempts remaining.`,
-        }
-      );
-    }
-
-    // Atomically mark challenge as CONSUMED to prevent race condition replays
-    const consumedResult = await AuthChallenge.findOneAndUpdate(
-      { challengeId, status: "PENDING" },
-      { status: "CONSUMED", consumedAt: new Date() }
-    );
-
-    if (!consumedResult) {
-      return apiError(
-        new Error("Challenge could not be consumed. Possible replay attempt."),
-        request,
-        {
-          status: 409,
-          code: "CHALLENGE_REPLAY_REJECTED",
-          fallbackMessage: "Challenge replay prevented.",
-        }
-      );
-    }
-
-    // Resolve user principal
-    const user = await User.findById(challenge.userId);
-    if (!user) {
-      return apiError(new Error("Associated user not found."), request, {
-        status: 404,
-        code: "USER_NOT_FOUND",
+        otp,
+        clientIp,
+        userAgent,
       });
-    }
-
-    if (!user.isActive) {
-      return apiError(
-        new Error("User account is inactive. Please contact system administrator."),
-        request,
-        {
-          status: 403,
-          code: "ACCOUNT_INACTIVE",
-        }
-      );
-    }
 
     // Create server-managed session in MongoDB and construct secure cookies
     const { csrfToken, cookieHeaders } = await createSession(
@@ -214,11 +65,18 @@ export async function POST(request: NextRequest) {
           name: user.name,
           role: user.role,
           phone: user.phone,
+          email: user.email,
           facility: user.facility,
           specialization: user.specialization,
           isActive: user.isActive,
+          isPhoneVerified: user.isPhoneVerified,
+          isEmailVerified: user.isEmailVerified,
         },
         csrfToken,
+        contactVerified,
+        channel: challenge.channel,
+        demoMode: true,
+        abdmSimulated: true,
         message: "Authentication successful. Server session initialized.",
       },
       request,
@@ -228,10 +86,72 @@ export async function POST(request: NextRequest) {
       }
     );
   } catch (error) {
+    const message = error instanceof Error ? error.message : "An error occurred during verification.";
+
+    if (message.includes("consumed") || message.includes("replay")) {
+      return apiError(error, request, {
+        status: 409,
+        code: "CHALLENGE_ALREADY_CONSUMED",
+        fallbackMessage: "This challenge has already been used.",
+      });
+    }
+
+    if (
+      message.includes("Maximum verification attempts") ||
+      message.includes("locked") ||
+      message.includes("exhausted")
+    ) {
+      return apiError(error, request, {
+        status: 403,
+        code: "CHALLENGE_EXHAUSTED",
+        fallbackMessage: "Maximum attempts exceeded. Please request a new OTP.",
+      });
+    }
+
+    if (message.includes("Incorrect OTP")) {
+      return apiError(error, request, {
+        status: 401,
+        code: "INVALID_OTP",
+        fallbackMessage: message,
+      });
+    }
+
+    if (message.includes("expired")) {
+      return apiError(error, request, {
+        status: 410,
+        code: "CHALLENGE_EXPIRED",
+        fallbackMessage: "Challenge expired.",
+      });
+    }
+
+    if (message.includes("does not exist")) {
+      return apiError(error, request, {
+        status: 404,
+        code: "CHALLENGE_NOT_FOUND",
+        fallbackMessage: "Invalid challenge reference.",
+      });
+    }
+
+    if (message.includes("Too many") || message.includes("Rate limit")) {
+      return apiError(error, request, {
+        status: 429,
+        code: "RATE_LIMIT_EXCEEDED",
+        fallbackMessage: "Rate limit exceeded for challenge verification.",
+      });
+    }
+
+    if (message.includes("concurrently")) {
+      return apiError(error, request, {
+        status: 409,
+        code: "CHALLENGE_CONCURRENT_CONFLICT",
+        fallbackMessage: "Conflict during challenge verification.",
+      });
+    }
+
     return apiError(error, request, {
       status: 500,
       code: "VERIFICATION_FAILED",
-      fallbackMessage: "An error occurred during OTP verification.",
+      fallbackMessage: message,
     });
   }
 }
