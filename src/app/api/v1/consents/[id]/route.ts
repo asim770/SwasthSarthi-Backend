@@ -9,9 +9,21 @@ import {
 import { apiSuccess } from "@/lib/api/response";
 import { handleCorsPreflight } from "@/lib/api/cors";
 
-const updateConsentSchema = z.object({
-  status: z.enum(["GRANTED", "DENIED", "REVOKED"]),
-});
+const updateConsentSchema = z
+  .object({
+    status: z.string().optional(),
+    decision: z.string().optional(),
+    note: z.string().optional(),
+  })
+  .transform((data) => {
+    let raw = (data.status || data.decision || "").toUpperCase();
+    if (raw === "APPROVED") raw = "GRANTED";
+    if (raw === "REJECTED") raw = "DENIED";
+    if (!["GRANTED", "DENIED", "REVOKED"].includes(raw)) {
+      raw = "GRANTED";
+    }
+    return { status: raw as "GRANTED" | "DENIED" | "REVOKED" };
+  });
 
 export async function OPTIONS(request: NextRequest): Promise<NextResponse> {
   return handleCorsPreflight(request);

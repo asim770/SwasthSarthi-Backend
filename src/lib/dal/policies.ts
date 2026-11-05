@@ -43,8 +43,25 @@ export async function requireAuthenticatedUser(
     isActive: result.user.isActive,
     facility: result.user.facility,
     specialization: result.user.specialization,
+    verificationStatus: result.user.verificationStatus,
     sessionId: result.session.sessionId,
   };
+}
+
+/**
+ * Assert that a professional/organization is approved by admin before operational access
+ */
+export function assertPractitionerApproved(
+  principal: AuthenticatedPrincipal,
+  context = "operational clinical workflows"
+): void {
+  if (["doctor", "laboratory", "pharmacy"].includes(principal.role)) {
+    if (principal.verificationStatus && principal.verificationStatus !== "APPROVED") {
+      throw new ForbiddenError(
+        `Account verification pending: Your ${principal.role} account is currently ${principal.verificationStatus}. You cannot access ${context} until approved by an administrator.`
+      );
+    }
+  }
 }
 
 /**

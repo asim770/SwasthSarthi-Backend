@@ -37,11 +37,11 @@ export async function GET(
 
     const patientObjectId = patientUser._id as mongoose.Types.ObjectId;
 
-    // 2. Determine clinical data scope based on role
     let clinicalRecords: unknown[] = [];
     let consents: unknown[] = [];
     let prescriptions: unknown[] = [];
     let labOrders: unknown[] = [];
+    let dispensingEvents: unknown[] = [];
 
     if (principal.role === "patient" || principal.role === "doctor") {
       try {
@@ -75,6 +75,13 @@ export async function GET(
         .sort({ orderDate: -1 })
         .limit(20)
         .lean();
+
+      // Fetch pharmacy dispensing events linked to this patient
+      const { DispensingEvent } = await import("@/lib/db/models/DispensingEvent");
+      dispensingEvents = await DispensingEvent.find({ patientId: patientObjectId })
+        .sort({ dispensedAt: -1 })
+        .limit(20)
+        .lean();
     }
 
     return apiSuccess(
@@ -85,11 +92,13 @@ export async function GET(
           totalConsents: consents.length,
           totalPrescriptions: prescriptions.length,
           totalLabOrders: labOrders.length,
+          totalDispensingEvents: dispensingEvents.length,
         },
         clinicalRecords,
         consents,
         prescriptions,
         labOrders,
+        dispensingEvents,
       },
       request,
       { status: 200 }

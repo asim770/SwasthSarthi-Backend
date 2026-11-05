@@ -4,7 +4,7 @@ const envSchema = z.object({
   NODE_ENV: z
     .enum(["development", "test", "production"])
     .default("development"),
-  PORT: z.coerce.number().default(3000),
+  PORT: z.coerce.number().default(4000),
   MONGODB_URI: z
     .string()
     .min(1, "MONGODB_URI is required")
@@ -14,7 +14,7 @@ const envSchema = z.object({
   REDIS_PASSWORD: z.string().optional(),
   CORS_ALLOWED_ORIGINS: z
     .string()
-    .default("http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173"),
+    .default("http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173"),
   OTP_PEPPER: z
     .string()
     .default("swasth_saarthi_demo_otp_pepper_2026"),

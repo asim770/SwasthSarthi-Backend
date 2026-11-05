@@ -43,6 +43,12 @@ export interface IUser extends Document {
   authProviders?: string[];
   accountStatus?: "active" | "pending_verification" | "suspended";
   lastLoginAt?: Date;
+  medicalQualification?: string;
+  registrationNumber?: string;
+  hospitalOrClinicName?: string;
+  organizationName?: string;
+  authorizedRepresentative?: string;
+  address?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -216,6 +222,30 @@ const UserSchema = new Schema<IUser>(
     verificationHistory: {
       type: [VerificationHistorySchema],
       default: [],
+    },
+    medicalQualification: {
+      type: String,
+      trim: true,
+    },
+    registrationNumber: {
+      type: String,
+      trim: true,
+    },
+    hospitalOrClinicName: {
+      type: String,
+      trim: true,
+    },
+    organizationName: {
+      type: String,
+      trim: true,
+    },
+    authorizedRepresentative: {
+      type: String,
+      trim: true,
+    },
+    address: {
+      type: String,
+      trim: true,
     },
   },
   {

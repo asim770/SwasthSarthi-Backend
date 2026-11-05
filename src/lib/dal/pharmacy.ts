@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 import { Prescription, IPrescription } from "@/lib/db/models/Prescription";
 import { DispensingEvent, IDispensingEventDocument } from "@/lib/db/models/DispensingEvent";
 import { SourceInstitutionRecord } from "@/lib/db/models/SourceInstitutionRecord";
+import { HealthRecord } from "@/lib/db/models/HealthRecord";
 import { User } from "@/lib/db/models/User";
 import { ConsentArtifact } from "@/lib/db/models/ConsentArtifact";
 import { AuthenticatedPrincipal } from "./types";
@@ -14,10 +15,12 @@ import {
 import {
   requireAllowedRole,
   assertDenyAdminClinicalAccess,
+  assertPractitionerApproved,
 } from "./policies";
 import { assertSafeIdentifier, assertSafeQueryInput } from "./sanitizer";
 import { logAuditEvent } from "./audit";
 import { assertFacilityApproved } from "./onboarding";
+import { createNotification } from "./notifications";
 import { connectToDatabase } from "@/lib/db/connect";
 import { validateFhirResource } from "@/lib/fhir/validator";
 
@@ -55,6 +58,7 @@ export async function createPrescription(
   input: CreatePrescriptionInput
 ): Promise<IPrescription> {
   requireAllowedRole(principal, ["doctor"], "Only licensed medical practitioners may create prescriptions.");
+  assertPractitionerApproved(principal, "issuing prescriptions");
   assertSafeQueryInput(input);
   assertSafeIdentifier(input.patientId, "patientId");
   await connectToDatabase();
@@ -344,6 +348,7 @@ export async function recordDispensation(
   duplicate?: boolean;
 }> {
   requireAllowedRole(principal, ["pharmacy"], "Only licensed pharmacists may record medication dispensations.");
+  assertPractitionerApproved(principal, "dispensing medications");
   assertSafeIdentifier(prescriptionId, "prescriptionId");
   assertSafeQueryInput(input);
   await connectToDatabase();
@@ -570,6 +575,51 @@ export async function recordDispensation(
     fhirResource: fhirMedicationDispense,
     isMockData: true,
   });
+
+  // 9. Also register unified local HealthRecord for patient timeline and records
+  try {
+    await HealthRecord.create({
+      recordId: `REC-DISP-${dispenseId}`,
+      patientId: updatedPrescription.patientId,
+      title: `Medication Dispensed: ${updatedPrescription.medications[0]?.name || "Medication"} (${quantityToDispense} units)`,
+      resourceType: "MedicationDispense",
+      date: now,
+      providerFacility: principal.facility,
+      doctorName: `Dispensed by Pharmacist ${principal.name}`,
+      status: "completed",
+      summary: `Dispensed ${quantityToDispense} units of ${updatedPrescription.medications[0]?.name || "Medication"} at ${principal.facility}. Batch: ${batchNumber}.`,
+      careContextId: `CARE-CTX-RX-${prescriptionId}`,
+      fhirBundleId: `urn:uuid:${crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2)}`,
+      clinicalData: {
+        dispenseId,
+        prescriptionId,
+        medicationName: updatedPrescription.medications[0]?.name,
+        quantityDispensed: quantityToDispense,
+        remainingQuantity: updatedPrescription.remainingQuantity,
+        batchNumber,
+        notes: input?.notes,
+        pharmacistName: principal.name,
+        facility: principal.facility,
+      },
+    });
+
+    // Notify patient about the dispensing
+    const patientUser = await User.findById(updatedPrescription.patientId);
+    if (patientUser) {
+      await createNotification({
+        recipientId: patientUser._id,
+        recipientAbha: patientUser.abhaAddress || patientUser.email || "patient@sbx",
+        recipientRole: "patient",
+        category: "DISPENSE",
+        title: "Medicine Dispensed",
+        message: `${quantityToDispense} units of ${updatedPrescription.medications[0]?.name || "Medication"} were dispensed by ${principal.facility}.`,
+        relatedResourceId: prescriptionId,
+        relatedResourceType: "MedicationDispense",
+      });
+    }
+  } catch (recErr) {
+    console.warn("Unified HealthRecord / Notification notice:", recErr);
+  }
 
   await logAuditEvent({
     action: "DISPENSE_MEDICATION",

@@ -1,6 +1,6 @@
 import mongoose from "mongoose";
 import { LabOrder, ILabOrder } from "@/lib/db/models/LabOrder";
-import { HealthRecord } from "@/lib/db/models/HealthRecord";
+import { HealthRecord, IHealthRecord } from "@/lib/db/models/HealthRecord";
 import { SourceInstitutionRecord } from "@/lib/db/models/SourceInstitutionRecord";
 import { User } from "@/lib/db/models/User";
 import { ConsentArtifact } from "@/lib/db/models/ConsentArtifact";
@@ -15,6 +15,7 @@ import {
   requireAllowedRole,
   assertFacilityMembership,
   assertDenyAdminClinicalAccess,
+  assertPractitionerApproved,
 } from "./policies";
 import { assertSafeQueryInput, assertSafeIdentifier } from "./sanitizer";
 import { logAuditEvent } from "./audit";
@@ -61,6 +62,7 @@ export async function createLaboratoryOrder(
   input: CreateLabOrderInput
 ): Promise<ILabOrder> {
   requireAllowedRole(principal, ["doctor"], "Only licensed medical practitioners may order laboratory tests.");
+  assertPractitionerApproved(principal, "ordering clinical laboratory tests");
   assertSafeQueryInput(input);
   assertSafeIdentifier(input.patientId, "patientId");
   await connectToDatabase();
@@ -315,6 +317,7 @@ export async function submitDiagnosticReport(
   input: SubmitDiagnosticReportInput
 ): Promise<{ order: ILabOrder; reportRecordId: string; fhirDiagnosticReport: Record<string, unknown> }> {
   requireAllowedRole(principal, ["laboratory"], "Only laboratory technicians may submit diagnostic reports.");
+  assertPractitionerApproved(principal, "submitting diagnostic reports");
   assertSafeIdentifier(orderId, "orderId");
   assertSafeQueryInput(input);
   await connectToDatabase();
@@ -589,3 +592,111 @@ export async function getLaboratorySubmittedReports(
     fhirResource: r.fhirResource,
   }));
 }
+
+export interface UploadDirectLabReportInput {
+  patientId: string;
+  testName: string;
+  testCategory?: string;
+  testDate?: string | Date;
+  observations?: DiagnosticObservationInput[];
+  testResults?: Record<string, unknown>;
+  technicianName?: string;
+  laboratoryName?: string;
+  pdfAttachment?: string;
+  notes?: string;
+  summary?: string;
+  orderId?: string;
+}
+
+/**
+ * Upload a comprehensive laboratory report directly associated with unique Patient ID
+ */
+export async function uploadDirectLaboratoryReport(
+  principal: AuthenticatedPrincipal,
+  input: UploadDirectLabReportInput
+): Promise<{ reportRecordId: string; healthRecord: IHealthRecord }> {
+  requireAllowedRole(principal, ["laboratory"], "Only registered diagnostic laboratories may upload test reports.");
+  assertPractitionerApproved(principal, "uploading laboratory test reports");
+  assertSafeQueryInput(input);
+  await connectToDatabase();
+
+  const { resolvePatientUser } = await import("./patients");
+  const patient = await resolvePatientUser(input.patientId);
+
+  const facility = input.laboratoryName?.trim() || principal.facility || "Diagnostic Laboratory";
+  await assertFacilityApproved(facility);
+
+  const now = input.testDate ? new Date(input.testDate) : new Date();
+  const reportRecordId = `REC-LAB-${Date.now().toString(36).toUpperCase()}`;
+  const careContextId = input.orderId || `LAB-DOC-${Date.now().toString(36).toUpperCase()}`;
+
+  const summary =
+    input.summary?.trim() ||
+    input.notes?.trim() ||
+    `${input.testName} completed successfully with verified clinical parameters.`;
+
+  const healthRecord = await HealthRecord.create({
+    recordId: reportRecordId,
+    patientId: patient._id,
+    title: `${input.testName}${input.testCategory ? ` (${input.testCategory})` : ""}`,
+    resourceType: "DiagnosticReport",
+    date: now,
+    providerFacility: facility,
+    doctorName: `Verified by ${input.technicianName?.trim() || principal.name} (Lab Specialist)`,
+    status: "final",
+    summary,
+    careContextId,
+    fhirBundleId: `urn:uuid:${crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2)}`,
+    clinicalData: {
+      testName: input.testName,
+      testCategory: input.testCategory || "Diagnostic Pathology",
+      observations: input.observations || [],
+      testResults: input.testResults || {},
+      technicianName: input.technicianName || principal.name,
+      laboratoryName: facility,
+      pdfAttachment: input.pdfAttachment,
+      notes: input.notes,
+      orderId: input.orderId,
+    },
+  });
+
+  // If orderId was provided, mark LabOrder as completed
+  if (input.orderId) {
+    try {
+      await LabOrder.findOneAndUpdate(
+        { orderId: input.orderId },
+        { status: "COMPLETED", completedAt: now, reportRecordId }
+      );
+    } catch {
+      // Non-blocking
+    }
+  }
+
+  await logAuditEvent({
+    action: "LAB_REPORT_UPLOADED",
+    principal,
+    targetResourceType: "HealthRecord",
+    targetResourceId: reportRecordId,
+    targetPatientId: patient._id,
+    outcome: "ALLOWED",
+    metadata: {
+      testName: input.testName,
+      facility,
+      patientId: patient.patientId,
+    },
+  });
+
+  await createNotification({
+    recipientId: patient._id,
+    recipientAbha: patient.abhaAddress || patient.email || "patient@sbx",
+    recipientRole: "patient",
+    category: "LAB_REPORT",
+    title: "New Laboratory Report Available",
+    message: `Your ${input.testName} report from ${facility} has been uploaded and is ready to view.`,
+    relatedResourceId: reportRecordId,
+    relatedResourceType: "DiagnosticReport",
+  });
+
+  return { reportRecordId, healthRecord };
+}
+

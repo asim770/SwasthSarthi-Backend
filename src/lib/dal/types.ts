@@ -10,6 +10,7 @@ export interface AuthenticatedPrincipal {
   isActive: boolean;
   facility?: string;
   specialization?: string;
+  verificationStatus?: "PENDING" | "APPROVED" | "REJECTED" | "SUSPENDED";
   sessionId: string;
 }
 

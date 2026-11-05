@@ -220,6 +220,7 @@ export async function POST(request: NextRequest) {
           email: user.email,
           authProviders: user.authProviders || ["password"],
           accountStatus: user.accountStatus || "active",
+          verificationStatus: user.verificationStatus || "APPROVED",
           facility: user.facility,
           specialization: user.specialization,
           gender: user.gender,

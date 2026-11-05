@@ -202,19 +202,18 @@ export async function POST(request: NextRequest) {
         }
 
         if (!existingEmailUser.googleSubject) {
-          // Account was registered with password and not yet linked to Google
-          return apiError(
-            new Error(
-              "An account with this email already exists. Please sign in using your password, then link Google in Account Settings."
-            ),
-            request,
-            {
-              status: 409,
-              code: "ACCOUNT_LINK_REQUIRED",
-              fallbackMessage:
-                "An account with this email already exists. Please sign in with your Patient ID or password first, then link your Google account in Settings.",
-            }
-          );
+          // Account was registered with password and not yet linked to Google.
+          // Since Google has cryptographically verified the email address, securely link Google identity
+          existingEmailUser.googleSubject = googleSub;
+          if (!existingEmailUser.authProviders?.includes("google")) {
+            existingEmailUser.authProviders = [...(existingEmailUser.authProviders || []), "google"];
+          }
+          if (!existingEmailUser.patientId) {
+            existingEmailUser.patientId = await generateUniquePatientId();
+          }
+          existingEmailUser.isEmailVerified = true;
+          existingEmailUser.lastLoginAt = new Date();
+          await existingEmailUser.save();
         }
 
         user = existingEmailUser;
@@ -223,7 +222,6 @@ export async function POST(request: NextRequest) {
 
     // 3. Handle account not found
     if (!user) {
-      // If user strictly requested "login", direct them to registration
       if (mode === "login") {
         return apiError(
           new Error("No SwasthSaarthi patient account found for this Google identity. Please sign up first."),
@@ -237,7 +235,7 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      // New Patient Registration via Google OAuth
+      // Patient Registration via Google OAuth
       const patientId = await generateUniquePatientId();
       const username = normalizedEmail.split("@")[0].replace(/[^a-zA-Z0-9]/g, "").toLowerCase() || "patient";
       const randSuffix = crypto.randomInt(1000, 9999);

@@ -307,6 +307,47 @@ export async function reviewPractitioner(
 
   await user.save();
 
+  // If practitioner is associated with a facility, harmonize the facility verification status
+  if (user.facility) {
+    if (newStatus === "APPROVED") {
+      await Facility.updateMany(
+        {
+          $or: [
+            { name: user.facility },
+            { facilityId: user.facility },
+            { registeredBy: user._id },
+          ],
+          status: "PENDING",
+        },
+        {
+          $set: {
+            status: "APPROVED",
+            verifiedBy: new mongoose.Types.ObjectId(principal.id),
+            verifiedByName: principal.name,
+            verifiedAt: new Date(),
+            statusReason: `Approved via practitioner ${user.name} review`,
+          },
+        }
+      );
+    } else if (newStatus === "SUSPENDED" || newStatus === "REJECTED") {
+      await Facility.updateMany(
+        {
+          $or: [
+            { name: user.facility },
+            { facilityId: user.facility },
+            { registeredBy: user._id },
+          ],
+        },
+        {
+          $set: {
+            status: newStatus,
+            statusReason: `Updated to ${newStatus} via practitioner ${user.name} review`,
+          },
+        }
+      );
+    }
+  }
+
   await logAuditEvent({
     action: `PRACTITIONER_${newStatus}`,
     principal,

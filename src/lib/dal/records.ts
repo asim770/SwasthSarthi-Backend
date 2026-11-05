@@ -8,10 +8,15 @@ import {
   ConsentRequiredError,
   InvalidQueryError,
 } from "./errors";
-import { assertDenyAdminClinicalAccess } from "./policies";
+import {
+  assertDenyAdminClinicalAccess,
+  assertPractitionerApproved,
+  requireAllowedRole,
+} from "./policies";
 import { assertSafeQueryInput, assertSafeIdentifier } from "./sanitizer";
 import { evaluateConsent } from "./consents";
 import { logAuditEvent } from "./audit";
+import { createNotification } from "./notifications";
 import { connectToDatabase } from "@/lib/db/connect";
 import { resolvePatientUser } from "./patients";
 
@@ -336,3 +341,340 @@ export async function createHealthRecord(
 
   return record;
 }
+
+export interface PrescribedMedicineInput {
+  name: string;
+  dosage: string;
+  frequency: string;
+  durationDays: number;
+  quantity?: number;
+  instructions?: string;
+}
+
+export interface RecommendedLabTestInput {
+  testName: string;
+  testCode?: string;
+  priority?: "ROUTINE" | "URGENT" | "STAT";
+  instructions?: string;
+}
+
+export interface CreateDoctorConsultationInput {
+  patientId: string;
+  consultationDate?: string | Date;
+  symptoms: string;
+  clinicalFindings?: string;
+  diagnosis: string;
+  treatmentPlan: string;
+  prescribedMedicines?: PrescribedMedicineInput[];
+  recommendedTests?: RecommendedLabTestInput[];
+  followUpDate?: string;
+  clinicalNotes?: string;
+  supportingDocuments?: string[];
+}
+
+/**
+ * Doctor submits a comprehensive consultation record
+ */
+export async function createDoctorConsultation(
+  principal: AuthenticatedPrincipal,
+  input: CreateDoctorConsultationInput
+): Promise<{
+  consultationRecord: IHealthRecord;
+  prescriptionId?: string;
+  labOrderIds?: string[];
+}> {
+  requireAllowedRole(principal, ["doctor"], "Only licensed medical practitioners may submit consultation records.");
+  assertPractitionerApproved(principal, "submitting clinical consultation reports");
+  assertSafeQueryInput(input);
+  await connectToDatabase();
+
+  const patient = await resolvePatientUser(input.patientId);
+  const patientObjectId = patient._id as mongoose.Types.ObjectId;
+
+  // Verify active electronic consent
+  const now = new Date();
+  const activeConsent = await ConsentArtifact.findOne({
+    patientId: patientObjectId,
+    requesterDoctorId: new mongoose.Types.ObjectId(principal.id),
+    status: { $in: ["APPROVED", "GRANTED"] },
+    expiresAt: { $gt: now },
+  });
+
+  if (!activeConsent) {
+    await logAuditEvent({
+      action: "SUBMIT_CONSULTATION_DENIED",
+      principal,
+      targetResourceType: "HealthRecord",
+      targetPatientId: patientObjectId.toString(),
+      outcome: "DENIED",
+      denialReason: "No active granted electronic consent found for doctor",
+    });
+    throw new ConsentRequiredError(
+      "Active patient electronic consent is required before submitting clinical consultations."
+    );
+  }
+
+  const consultationDate = input.consultationDate ? new Date(input.consultationDate) : now;
+  const recordId = `REC-ENC-${Date.now().toString(36).toUpperCase()}-${Math.floor(100 + Math.random() * 900)}`;
+  const careContextId = `OPD-${Date.now().toString(36).toUpperCase()}`;
+
+  // 1. Create Encounter HealthRecord
+  const consultationRecord = await HealthRecord.create({
+    recordId,
+    patientId: patientObjectId,
+    title: `Consultation: ${input.diagnosis.trim()}`,
+    resourceType: "Encounter",
+    date: consultationDate,
+    providerFacility: principal.facility || "SwasthSaarthi Care Network",
+    doctorName: `Dr. ${principal.name}`,
+    doctorId: new mongoose.Types.ObjectId(principal.id),
+    status: "final",
+    summary:
+      input.treatmentPlan?.trim() ||
+      input.clinicalNotes?.trim() ||
+      `Clinical evaluation for ${input.diagnosis.trim()}`,
+    careContextId,
+    fhirBundleId: `urn:uuid:${crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2)}`,
+    clinicalData: {
+      symptoms: input.symptoms,
+      clinicalFindings: input.clinicalFindings,
+      diagnosis: input.diagnosis,
+      treatmentPlan: input.treatmentPlan,
+      prescribedMedicines: input.prescribedMedicines || [],
+      recommendedTests: input.recommendedTests || [],
+      followUpDate: input.followUpDate,
+      clinicalNotes: input.clinicalNotes,
+      supportingDocuments: input.supportingDocuments || [],
+      doctorSpecialization: principal.specialization,
+      doctorFacility: principal.facility,
+    },
+  });
+
+  // 2. Automatically create Prescription if medicines prescribed
+  let prescriptionId: string | undefined;
+  if (input.prescribedMedicines && input.prescribedMedicines.length > 0) {
+    try {
+      const { Prescription } = await import("@/lib/db/models/Prescription");
+      prescriptionId = `RX-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+      const expiresAt = new Date(now.getTime() + 30 * 86400000);
+
+      const medications = input.prescribedMedicines.map((m) => {
+        const qty = m.quantity && m.quantity > 0 ? m.quantity : m.durationDays * 2 || 30;
+        return {
+          name: m.name,
+          dosage: m.dosage,
+          frequency: m.frequency,
+          durationDays: m.durationDays,
+          route: "oral",
+          quantity: qty,
+          remainingQuantity: qty,
+          instructions: m.instructions,
+        };
+      });
+
+      const totalQuantity = medications.reduce((sum, m) => sum + m.quantity, 0);
+
+      await Prescription.create({
+        prescriptionId,
+        patientId: patientObjectId,
+        patientName: patient.name,
+        doctorId: new mongoose.Types.ObjectId(principal.id),
+        doctorName: principal.name,
+        facility: principal.facility || "Care Clinic",
+        medications,
+        status: "ACTIVE",
+        totalQuantity,
+        dispensedQuantity: 0,
+        remainingQuantity: totalQuantity,
+        maxRefills: 0,
+        remainingRefills: 0,
+        prescribedAt: now,
+        expiresAt,
+        dispensedEvents: [],
+      });
+
+      // Also create MedicationRequest HealthRecord
+      await HealthRecord.create({
+        recordId: `REC-RX-${prescriptionId}`,
+        patientId: patientObjectId,
+        title: `Prescription: ${medications.map((m) => m.name).join(", ")}`,
+        resourceType: "MedicationRequest",
+        date: consultationDate,
+        providerFacility: principal.facility || "Care Clinic",
+        doctorName: `Dr. ${principal.name}`,
+        doctorId: new mongoose.Types.ObjectId(principal.id),
+        status: "final",
+        summary: `Prescription issued: ${medications.map((m) => `${m.name} (${m.dosage})`).join("; ")}`,
+        careContextId,
+        fhirBundleId: `urn:uuid:${crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2)}`,
+        clinicalData: {
+          prescriptionId,
+          medications,
+          instructions: input.treatmentPlan,
+        },
+      });
+    } catch (rxErr) {
+      console.warn("Prescription auto-creation notice:", rxErr);
+    }
+  }
+
+  // 3. Automatically create Lab Orders if tests recommended
+  const labOrderIds: string[] = [];
+  if (input.recommendedTests && input.recommendedTests.length > 0) {
+    try {
+      const { LabOrder } = await import("@/lib/db/models/LabOrder");
+      for (const t of input.recommendedTests) {
+        const orderId = `LAB-ORD-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+        await LabOrder.create({
+          orderId,
+          patientId: patientObjectId,
+          patientName: patient.name,
+          patientAbha: patient.abhaAddress || "patient@sbx",
+          doctorId: new mongoose.Types.ObjectId(principal.id),
+          doctorName: principal.name,
+          targetFacility: "All Diagnostic Laboratories",
+          testName: t.testName,
+          testCode: t.testCode || "LAB-DIAG",
+          instructions: t.instructions || input.treatmentPlan,
+          status: "ORDERED",
+          priority: t.priority || "ROUTINE",
+          orderedAt: now,
+        });
+        labOrderIds.push(orderId);
+      }
+    } catch (labErr) {
+      console.warn("Lab order auto-creation notice:", labErr);
+    }
+  }
+
+  // 4. Audit logging
+  await logAuditEvent({
+    action: "DOCTOR_ADD_CONSULTATION",
+    principal,
+    targetResourceType: "HealthRecord",
+    targetResourceId: recordId,
+    targetPatientId: patientObjectId,
+    outcome: "ALLOWED",
+    metadata: {
+      diagnosis: input.diagnosis,
+      facility: principal.facility,
+      prescriptionsCount: input.prescribedMedicines?.length || 0,
+      labOrdersCount: labOrderIds.length,
+    },
+  });
+
+  // 5. Patient notification
+  await createNotification({
+    recipientId: patientObjectId,
+    recipientAbha: patient.abhaAddress || patient.email || "patient@sbx",
+    recipientRole: "patient",
+    category: "CONSULTATION",
+    title: "New Doctor Consultation Report",
+    message: `Dr. ${principal.name} has added a new consultation report (${input.diagnosis}) to your health record.`,
+    relatedResourceId: recordId,
+    relatedResourceType: "Encounter",
+  });
+
+  return {
+    consultationRecord,
+    prescriptionId,
+    labOrderIds,
+  };
+}
+
+export interface CreateHealthAssessmentInput {
+  patientId: string;
+  assessmentTitle: string;
+  currentAssessment: string;
+  observations?: string;
+  changesSincePrevious?: string;
+  treatmentProgress?: string;
+  followUpRecommendations?: string;
+  nextReviewDate?: string;
+}
+
+/**
+ * Doctor adds a health assessment / health status update
+ */
+export async function createHealthAssessment(
+  principal: AuthenticatedPrincipal,
+  input: CreateHealthAssessmentInput
+): Promise<IHealthRecord> {
+  requireAllowedRole(principal, ["doctor"], "Only licensed medical practitioners may submit health assessments.");
+  assertPractitionerApproved(principal, "updating patient health status");
+  assertSafeQueryInput(input);
+  await connectToDatabase();
+
+  const patient = await resolvePatientUser(input.patientId);
+  const patientObjectId = patient._id as mongoose.Types.ObjectId;
+
+  const now = new Date();
+  const activeConsent = await ConsentArtifact.findOne({
+    patientId: patientObjectId,
+    requesterDoctorId: new mongoose.Types.ObjectId(principal.id),
+    status: { $in: ["APPROVED", "GRANTED"] },
+    expiresAt: { $gt: now },
+  });
+
+  if (!activeConsent) {
+    throw new ConsentRequiredError(
+      "Active patient electronic consent is required before updating health assessments."
+    );
+  }
+
+  const recordId = `REC-OBS-${Date.now().toString(36).toUpperCase()}-${Math.floor(100 + Math.random() * 900)}`;
+
+  const record = await HealthRecord.create({
+    recordId,
+    patientId: patientObjectId,
+    title: `Doctor Assessment: ${input.assessmentTitle.trim()}`,
+    resourceType: "Observation",
+    date: now,
+    providerFacility: principal.facility || "Care Clinic",
+    doctorName: `Dr. ${principal.name}`,
+    doctorId: new mongoose.Types.ObjectId(principal.id),
+    status: "final",
+    summary: input.currentAssessment.trim(),
+    careContextId: `ASSESS-${Date.now().toString(36).toUpperCase()}`,
+    fhirBundleId: `urn:uuid:${crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2)}`,
+    clinicalData: {
+      assessmentTitle: input.assessmentTitle,
+      currentAssessment: input.currentAssessment,
+      observations: input.observations,
+      changesSincePrevious: input.changesSincePrevious,
+      treatmentProgress: input.treatmentProgress,
+      followUpRecommendations: input.followUpRecommendations,
+      nextReviewDate: input.nextReviewDate,
+      reviewedByDoctor: principal.name,
+      doctorSpecialization: principal.specialization,
+      doctorFacility: principal.facility,
+    },
+  });
+
+  await logAuditEvent({
+    action: "DOCTOR_UPDATE_HEALTH_ASSESSMENT",
+    principal,
+    targetResourceType: "HealthRecord",
+    targetResourceId: recordId,
+    targetPatientId: patientObjectId,
+    outcome: "ALLOWED",
+    metadata: {
+      assessmentTitle: input.assessmentTitle,
+      doctor: principal.name,
+    },
+  });
+
+  await createNotification({
+    recipientId: patientObjectId,
+    recipientAbha: patient.abhaAddress || patient.email || "patient@sbx",
+    recipientRole: "patient",
+    category: "CONSULTATION",
+    title: "Health Assessment Updated",
+    message: `Dr. ${principal.name} updated your clinical health assessment: ${input.assessmentTitle}.`,
+    relatedResourceId: recordId,
+    relatedResourceType: "Observation",
+  });
+
+  return record;
+}
+

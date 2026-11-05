@@ -47,6 +47,7 @@ export async function GET(request: NextRequest) {
           dateOfBirth: user.dateOfBirth,
           authProviders: user.authProviders || ["password"],
           accountStatus: user.accountStatus || "active",
+          verificationStatus: user.verificationStatus || "APPROVED",
           isEmailVerified: user.isEmailVerified || false,
           isPhoneVerified: user.isPhoneVerified || false,
           isGoogleLinked: !!user.googleSubject,

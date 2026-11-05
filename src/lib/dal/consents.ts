@@ -237,12 +237,9 @@ export async function createConsentRequest(
     throw new ForbiddenError("Doctor must be affiliated with a verified healthcare facility to request consent.");
   }
 
-  if (!mongoose.isValidObjectId(input.patientId)) {
-    throw new InvalidQueryError("Invalid patient identifier format.");
-  }
-
-  // 1. Validate target patient exists, is active, and has patient role
-  const patient = await User.findById(input.patientId);
+  // 1. Resolve target patient by ObjectId, unique Patient ID, or ABHA address
+  const { resolvePatientUser } = await import("./patients");
+  const patient = await resolvePatientUser(input.patientId);
   if (!patient || patient.role !== "patient" || !patient.isActive) {
     throw new NotFoundError("Target patient does not exist or account is inactive.");
   }

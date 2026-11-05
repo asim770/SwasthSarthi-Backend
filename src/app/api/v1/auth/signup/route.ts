@@ -15,10 +15,14 @@ export const dynamic = "force-dynamic";
 
 const signupSchema = z
   .object({
+    role: z
+      .enum(["patient", "doctor", "laboratory", "pharmacy"])
+      .optional()
+      .default("patient"),
     name: z
       .string()
-      .min(2, "Full name must be at least 2 characters")
-      .max(100, "Full name exceeds maximum length")
+      .min(2, "Name must be at least 2 characters")
+      .max(100, "Name exceeds maximum length")
       .trim(),
     email: z
       .string()
@@ -47,6 +51,15 @@ const signupSchema = z
       .string()
       .regex(/^\d{4}-\d{2}-\d{2}$/, "Date of birth format must be YYYY-MM-DD")
       .optional(),
+    // Doctor specific fields
+    medicalQualification: z.string().max(100).optional(),
+    specialization: z.string().max(100).optional(),
+    registrationNumber: z.string().max(100).optional(),
+    hospitalOrClinicName: z.string().max(150).optional(),
+    // Organization (Lab / Pharmacy) fields
+    organizationName: z.string().max(150).optional(),
+    authorizedRepresentative: z.string().max(100).optional(),
+    address: z.string().max(250).optional(),
   })
   .refine(
     (data) => !data.confirmPassword || data.password === data.confirmPassword,
@@ -62,8 +75,9 @@ export async function OPTIONS(request: NextRequest) {
 
 /**
  * POST /api/v1/auth/signup & POST /api/v1/auth/register
- * Manual patient registration with email, password, and profile details.
- * Generates unique Patient ID, creates pending patient record, and initiates email OTP verification via Resend.
+ * Role-based registration for Patient, Doctor, Laboratory, and Pharmacy accounts.
+ * - Patients: assigned permanent unique Patient ID (SS-PAT-XXXXXX), email OTP verification challenge.
+ * - Doctors / Labs / Pharmacies: created in PENDING status for administrator review and approval.
  */
 export async function POST(request: NextRequest) {
   try {
@@ -77,7 +91,22 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    const { name, email, password, phone, gender, dateOfBirth } = parseResult.data;
+    const {
+      role = "patient",
+      name,
+      email,
+      password,
+      phone,
+      gender,
+      dateOfBirth,
+      medicalQualification,
+      specialization,
+      registrationNumber,
+      hospitalOrClinicName,
+      organizationName,
+      authorizedRepresentative,
+      address,
+    } = parseResult.data;
     const normalizedEmail = email.trim().toLowerCase();
 
     await connectToDatabase();
@@ -96,14 +125,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 1. Generate guaranteed unique, permanent Patient ID
-    const patientId = await generateUniquePatientId();
-
-    // 2. Hash password securely using PBKDF2 with SHA-512
+    // 1. Hash password securely using PBKDF2 with SHA-512
     const passwordHash = await hashPassword(password);
 
-    // 3. Generate compliant synthetic ABHA identifier & address for HL7/FHIR records
-    const username = normalizedEmail.split("@")[0].replace(/[^a-zA-Z0-9]/g, "").toLowerCase() || "patient";
+    // 2. Generate compliant synthetic ABHA identifier & address for HL7/FHIR records
+    const username =
+      normalizedEmail.split("@")[0].replace(/[^a-zA-Z0-9]/g, "").toLowerCase() ||
+      role;
     const randSuffix = crypto.randomInt(1000, 9999);
     const abhaAddress = `${username}${randSuffix}@sbx`;
     const abhaId = `91-${crypto.randomInt(1000, 9999)}-${crypto.randomInt(1000, 9999)}-${crypto.randomInt(1000, 9999)}`;
@@ -112,6 +140,123 @@ export async function POST(request: NextRequest) {
       phone && phone.trim().length >= 8
         ? phone.trim()
         : `+91-${crypto.randomInt(6000000000, 9999999999)}`;
+
+    // Handle Doctor, Laboratory, and Pharmacy registration (Pending admin approval)
+    if (role === "doctor" || role === "laboratory" || role === "pharmacy") {
+      const facilityName =
+        role === "doctor"
+          ? hospitalOrClinicName || "Primary Health Center"
+          : organizationName || name || `${role.toUpperCase()} Facility`;
+
+      const newUser = await User.create({
+        name,
+        email: normalizedEmail,
+        passwordHash,
+        role,
+        isActive: true,
+        accountStatus: "active",
+        authProviders: ["password"],
+        phone: normalizedPhone,
+        gender: gender || "Other",
+        dateOfBirth: dateOfBirth || "1988-01-01",
+        abhaId,
+        abhaAddress,
+        isEmailVerified: true,
+        isPhoneVerified: true,
+        facility: facilityName,
+        specialization: specialization || (role === "doctor" ? "General Medicine" : undefined),
+        medicalQualification,
+        registrationNumber,
+        hospitalOrClinicName,
+        organizationName,
+        authorizedRepresentative,
+        address,
+        verificationStatus: "PENDING",
+        verificationHistory: [
+          {
+            fromStatus: "PENDING",
+            toStatus: "PENDING",
+            changedBy: new mongoose.Types.ObjectId(),
+            changedByName: `${role.toUpperCase()} Self-Registration Portal`,
+            changedAt: new Date(),
+            reason: `${role.toUpperCase()} registration submitted; awaiting administrator verification and approval.`,
+          },
+        ],
+      });
+
+      // If laboratory or pharmacy, also register in Facility collection in PENDING state
+      if (role === "laboratory" || role === "pharmacy") {
+        try {
+          const { Facility } = await import("@/lib/db/models/Facility");
+          const facType = role === "laboratory" ? ("LABORATORY" as const) : ("PHARMACY" as const);
+          const facId = `${role === "laboratory" ? "LAB" : "PHARM"}-${Date.now().toString(36).toUpperCase()}`;
+          await Facility.create({
+            facilityId: facId,
+            name: facilityName,
+            type: facType,
+            status: "PENDING",
+            address: address || "Healthcare Center Hub",
+            contactPhone: normalizedPhone,
+            contactEmail: normalizedEmail,
+            demoHfrId: `IN07${Date.now().toString().slice(-6)}`,
+            registeredBy: newUser._id,
+            registeredByName: name,
+            changeHistory: [
+              {
+                fromStatus: "PENDING",
+                toStatus: "PENDING",
+                changedBy: newUser._id,
+                changedByName: name,
+                changedAt: new Date(),
+                reason: `${role.toUpperCase()} facility self-registered; pending admin verification.`,
+              },
+            ],
+          });
+        } catch (facErr) {
+          console.warn("Facility registration notice:", facErr);
+        }
+      }
+
+      await logAuditEvent({
+        action: `PRACTITIONER_REGISTERED_PENDING_APPROVAL`,
+        principal: {
+          id: newUser._id.toString(),
+          role: newUser.role,
+        },
+        targetResourceType: "User",
+        targetResourceId: newUser._id.toString(),
+        outcome: "ALLOWED",
+        metadata: {
+          role,
+          email: normalizedEmail,
+          facility: facilityName,
+          verificationStatus: "PENDING",
+        },
+      });
+
+      return apiSuccess(
+        {
+          requiresVerification: false,
+          pendingApproval: true,
+          user: {
+            id: newUser._id.toString(),
+            email: newUser.email,
+            name: newUser.name,
+            role: newUser.role,
+            facility: newUser.facility,
+            verificationStatus: newUser.verificationStatus,
+          },
+          message: `${role.charAt(0).toUpperCase() + role.slice(1)} registration submitted successfully. Your account is pending administrator verification and approval.`,
+        },
+        request,
+        {
+          status: 201,
+        }
+      );
+    }
+
+    // 3. For Patient: Generate guaranteed unique, permanent Patient ID
+    const patientId = await generateUniquePatientId();
 
     // 4. Create new Patient record in MongoDB with pending verification status
     const newUser = await User.create({

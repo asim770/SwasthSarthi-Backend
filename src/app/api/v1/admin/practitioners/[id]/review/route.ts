@@ -13,8 +13,16 @@ export async function OPTIONS(request: NextRequest): Promise<NextResponse> {
 }
 
 const ReviewDecisionSchema = z.object({
-  decision: z.enum(["APPROVED", "REJECTED", "SUSPENDED"]),
-  reason: z.string().min(3, "Reason must be at least 3 characters."),
+  decision: z.preprocess((val) => {
+    if (val === "APPROVE") return "APPROVED";
+    if (val === "REJECT") return "REJECTED";
+    if (val === "SUSPEND") return "SUSPENDED";
+    return val;
+  }, z.enum(["APPROVED", "REJECTED", "SUSPENDED"])),
+  reason: z
+    .string()
+    .optional()
+    .default("Reviewed and processed by administrator."),
 });
 
 export async function POST(

@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 import { connectToDatabase } from "@/lib/db/connect";
 import { User } from "@/lib/db/models/User";
 import { createSession } from "@/lib/auth/session";
+import { generateUniquePatientId } from "@/lib/auth/patientId";
 import { env } from "@/lib/env";
 
 export const dynamic = "force-dynamic";
@@ -16,7 +17,7 @@ export async function GET(request: NextRequest) {
   const code = searchParams.get("code");
   const error = searchParams.get("error");
 
-  const frontendUrl = env.CORS_ALLOWED_ORIGINS.split(",")[0] || "http://localhost:5173";
+  const frontendUrl = env.CORS_ALLOWED_ORIGINS.split(",")[0] || "http://localhost:3000";
 
   if (error || !code) {
     return NextResponse.redirect(`${frontendUrl}/?auth_error=${encodeURIComponent(error || "missing_code")}`);
@@ -39,6 +40,7 @@ export async function GET(request: NextRequest) {
     });
 
     if (!exchangeResponse.ok) {
+      console.error("Google OAuth token exchange failed:", await exchangeResponse.text());
       return NextResponse.redirect(`${frontendUrl}/?auth_error=code_exchange_failed`);
     }
 
@@ -54,27 +56,39 @@ export async function GET(request: NextRequest) {
 
     const googlePayload = await verifyResponse.json();
     const email = googlePayload.email?.toLowerCase().trim();
+    const googleSub = googlePayload.sub?.trim();
 
     if (!email) {
       return NextResponse.redirect(`${frontendUrl}/?auth_error=missing_email`);
     }
 
     await connectToDatabase();
-    let user = await User.findOne({ email });
+    
+    // Look up by Google Subject or verified email address
+    let user = googleSub ? await User.findOne({ googleSubject: googleSub }) : null;
+    if (!user) {
+      user = await User.findOne({ email });
+    }
 
     if (!user) {
-      const username = email.split("@")[0].replace(/[^a-zA-Z0-9]/g, "").toLowerCase() || "user";
+      const patientId = await generateUniquePatientId();
+      const username = email.split("@")[0].replace(/[^a-zA-Z0-9]/g, "").toLowerCase() || "patient";
       const randSuffix = Math.floor(1000 + Math.random() * 9000);
       user = await User.create({
+        patientId,
         abhaId: `91-${Math.floor(1000 + Math.random() * 9000)}-${Math.floor(1000 + Math.random() * 9000)}-${Math.floor(1000 + Math.random() * 9000)}`,
         abhaAddress: `${username}${randSuffix}@sbx`,
-        name: googlePayload.name || "Google User",
+        name: googlePayload.name || "Google Patient",
         role: "patient",
         isActive: true,
+        accountStatus: "active",
         phone: "+91-9876543210",
         email,
         isEmailVerified: true,
         emailVerifiedAt: new Date(),
+        googleSubject: googleSub,
+        authProviders: ["google"],
+        lastLoginAt: new Date(),
         verificationStatus: "APPROVED",
         verificationHistory: [
           {
@@ -83,15 +97,29 @@ export async function GET(request: NextRequest) {
             changedBy: new mongoose.Types.ObjectId(),
             changedByName: "Google Identity Provider",
             changedAt: new Date(),
-            reason: "Verified through Google OAuth Redirect",
+            reason: `Verified and assigned Patient ID ${patientId} through Google OAuth Redirect`,
           },
         ],
       });
+    } else {
+      // Ensure patientId is assigned and google credentials linked
+      if (!user.patientId) {
+        user.patientId = await generateUniquePatientId();
+      }
+      if (googleSub && !user.googleSubject) {
+        user.googleSubject = googleSub;
+      }
+      if (!user.authProviders?.includes("google")) {
+        user.authProviders = [...(user.authProviders || []), "google"];
+      }
+      user.isEmailVerified = true;
+      user.lastLoginAt = new Date();
+      await user.save();
     }
 
     const { cookieHeaders } = await createSession(user._id, user.role, request);
 
-    const response = NextResponse.redirect(`${frontendUrl}/?login=success`);
+    const response = NextResponse.redirect(`${frontendUrl}/dashboard?login=success`);
     for (const cookie of cookieHeaders) {
       response.headers.append("Set-Cookie", cookie);
     }

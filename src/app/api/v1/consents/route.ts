@@ -9,14 +9,34 @@ import {
 import { apiSuccess } from "@/lib/api/response";
 import { handleCorsPreflight } from "@/lib/api/cors";
 
-const createConsentSchema = z.object({
-  patientId: z.string().min(1, "patientId is required"),
-  purpose: z.string().min(5, "Purpose must be at least 5 characters").max(250),
-  hiTypes: z.array(z.string()).min(1, "At least one hiType is required"),
-  dateRangeFrom: z.string().transform((v) => new Date(v)),
-  dateRangeTo: z.string().transform((v) => new Date(v)),
-  expiresAt: z.string().transform((v) => new Date(v)),
-});
+const createConsentSchema = z
+  .object({
+    patientId: z.string().min(1, "patientId is required"),
+    purpose: z.string().min(5, "Purpose must be at least 5 characters").max(250),
+    hiTypes: z.array(z.string()).min(1, "At least one hiType is required"),
+    dateRangeFrom: z.string().transform((v) => new Date(v)),
+    dateRangeTo: z.string().transform((v) => new Date(v)),
+    expiresAt: z
+      .string()
+      .optional()
+      .transform((v) => (v ? new Date(v) : undefined)),
+    expireDurationDays: z.number().optional(),
+  })
+  .transform((data) => {
+    const expiresAt =
+      data.expiresAt ||
+      (data.expireDurationDays
+        ? new Date(Date.now() + data.expireDurationDays * 86400000)
+        : new Date(Date.now() + 14 * 86400000));
+    return {
+      patientId: data.patientId,
+      purpose: data.purpose,
+      hiTypes: data.hiTypes,
+      dateRangeFrom: data.dateRangeFrom,
+      dateRangeTo: data.dateRangeTo,
+      expiresAt,
+    };
+  });
 
 export async function OPTIONS(request: NextRequest): Promise<NextResponse> {
   return handleCorsPreflight(request);

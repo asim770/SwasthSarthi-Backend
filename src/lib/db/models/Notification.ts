@@ -6,7 +6,9 @@ export type NotificationCategory =
   | "LAB_REPORT"
   | "PRESCRIPTION"
   | "ONBOARDING"
-  | "SECURITY";
+  | "SECURITY"
+  | "CONSULTATION"
+  | "DISPENSE";
 
 export type NotificationDeliveryStatus = "PENDING" | "DELIVERED" | "FAILED";
 
@@ -59,7 +61,16 @@ const NotificationSchema = new Schema<INotification>(
     category: {
       type: String,
       required: true,
-      enum: ["CONSENT", "RECORD_ACCESS", "LAB_REPORT", "PRESCRIPTION", "ONBOARDING", "SECURITY"],
+      enum: [
+        "CONSENT",
+        "RECORD_ACCESS",
+        "LAB_REPORT",
+        "PRESCRIPTION",
+        "ONBOARDING",
+        "SECURITY",
+        "CONSULTATION",
+        "DISPENSE",
+      ],
       index: true,
     },
     title: {
