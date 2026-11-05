@@ -116,7 +116,7 @@ export async function POST(request: NextRequest) {
 
     if (user.accountStatus === "suspended" || user.isActive === false) {
       return apiError(
-        new Error("This account is inactive or suspended. Please contact hospital support."),
+        new Error("This account is inactive or suspended. Please contact SwaasthSaarthi support."),
         request,
         {
           status: 403,
