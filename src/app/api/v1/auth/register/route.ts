@@ -1,1 +1,2 @@
-export { POST, OPTIONS, dynamic } from "../signup/route";
+export { POST, OPTIONS } from "../signup/route";
+export const dynamic = "force-dynamic";
