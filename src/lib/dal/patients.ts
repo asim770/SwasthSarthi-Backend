@@ -145,7 +145,14 @@ export async function listDiscoverablePatients(
     throw new ForbiddenError("Only registered healthcare practitioners may search patient registries.");
   }
 
-  const query: Record<string, unknown> = { role: "patient", isActive: true };
+  const query: Record<string, unknown> = {
+    role: "patient",
+    isActive: true,
+    name: { $ne: "Rahul Verma" },
+    patientId: { $ne: "PID-10000001" },
+    email: { $not: /@synthetic\.demo$/i },
+    abhaAddress: { $ne: "rahul.verma@sbx" },
+  };
   if (queryFilter && queryFilter.trim()) {
     const q = queryFilter.trim();
     assertSafeQueryInput(q);

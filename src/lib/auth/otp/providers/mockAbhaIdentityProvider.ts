@@ -24,7 +24,9 @@ export class DefaultMockAbhaIdentityProvider implements MockAbhaIdentityProvider
     const normalized = trimmed.toLowerCase();
 
     await connectToDatabase();
-    await seedDemoIdentities();
+    if (process.env.SEED_DEMO_IDENTITIES === "true") {
+      await seedDemoIdentities();
+    }
 
     // Look up in database
     const user = await User.findOne({
@@ -66,10 +68,10 @@ export class DefaultMockAbhaIdentityProvider implements MockAbhaIdentityProvider
         role: fallback.role,
         phone: fallback.phone,
         email: fallback.email,
-        gender: fallback.gender,
-        dateOfBirth: fallback.dateOfBirth,
-        facility: fallback.facility,
-        specialization: fallback.specialization,
+        gender: (fallback as { gender?: string }).gender,
+        dateOfBirth: (fallback as { dateOfBirth?: string }).dateOfBirth,
+        facility: (fallback as { facility?: string }).facility,
+        specialization: (fallback as { specialization?: string }).specialization,
         isActive: fallback.isActive,
         isMock: true,
       };

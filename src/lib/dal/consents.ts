@@ -161,13 +161,9 @@ export async function getConsentsForPrincipal(
     }
   }
 
-  const populateField =
-    principal.role === "patient"
-      ? { path: "requesterDoctorId", select: "name abhaId specialization facility" }
-      : { path: "patientId", select: "name abhaId abhaAddress gender dateOfBirth" };
-
   return ConsentArtifact.find(query)
-    .populate(populateField)
+    .populate("requesterDoctorId", "name abhaId specialization facility")
+    .populate("patientId", "name abhaId abhaAddress gender dateOfBirth")
     .sort({ createdAt: -1 });
 }
 

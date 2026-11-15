@@ -11,18 +11,6 @@ import { hashPassword } from "@/lib/security/crypto";
 
 export const DEMO_IDENTITIES = [
   {
-    patientId: "PID-10000001",
-    abhaId: "32-8492-1920-4491",
-    abhaAddress: "rahul.verma@sbx",
-    name: "Rahul Verma",
-    role: "patient" as const,
-    isActive: true,
-    phone: "+91-9876543210",
-    email: "rahul.verma@synthetic.demo",
-    gender: "Male",
-    dateOfBirth: "1992-05-14",
-  },
-  {
     abhaId: "HPR-DEL-2026-9912",
     abhaAddress: "dr.ananya@hpr.sbx",
     name: "Dr. Ananya Sharma",
@@ -94,7 +82,7 @@ export async function seedDemoIdentities(): Promise<void> {
     if (!existing) {
       await User.create({
         ...identity,
-        ...(identity.role === "patient" ? { passwordHash: defaultPasswordHash } : {}),
+        passwordHash: defaultPasswordHash,
       });
     } else {
       let needsSave = false;
@@ -109,11 +97,11 @@ export async function seedDemoIdentities(): Promise<void> {
           existing.patientId = targetPid;
           needsSave = true;
         }
-        await User.updateOne(
-          { _id: existing._id },
-          { $set: { passwordHash: defaultPasswordHash, isActive: identity.isActive } }
-        );
       }
+      await User.updateOne(
+        { _id: existing._id },
+        { $set: { passwordHash: defaultPasswordHash, isActive: identity.isActive } }
+      );
       if (needsSave) {
         await existing.save();
       }
@@ -193,138 +181,7 @@ export async function seedDemoIdentities(): Promise<void> {
       }
     }
 
-    // 2. Seed active electronic consent for Dr. Ananya Sharma from Rahul Verma
-    // Covers DiagnosticReport and Encounter between 2026-09-01 and 2026-12-31
-    const activeConsentExists = await ConsentArtifact.findOne({
-      consentId: "CONSENT-ACTIVE-CARDIOLOGY-01",
-    });
-    if (!activeConsentExists) {
-      await ConsentArtifact.create({
-        consentId: "CONSENT-ACTIVE-CARDIOLOGY-01",
-        patientId: patient._id,
-        requesterDoctorId: doctor._id,
-        requesterFacility: "Apollo Clinics, Indiranagar",
-        purpose: "Cardiology Evaluation and Longitudinal Management",
-        hiTypes: ["DiagnosticReport", "Encounter"],
-        dateRangeFrom: new Date("2026-09-01"),
-        dateRangeTo: new Date("2026-12-31"),
-        expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days in future
-        status: "GRANTED",
-        grantedAt: new Date("2026-10-01"),
-      });
-    }
 
-    // 3. Seed revoked consent for Observation
-    const revokedConsentExists = await ConsentArtifact.findOne({
-      consentId: "CONSENT-REVOKED-OPHTHAL-02",
-    });
-    if (!revokedConsentExists) {
-      await ConsentArtifact.create({
-        consentId: "CONSENT-REVOKED-OPHTHAL-02",
-        patientId: patient._id,
-        requesterDoctorId: doctor._id,
-        requesterFacility: "Apollo Clinics, Indiranagar",
-        purpose: "Ophthalmology Consultation",
-        hiTypes: ["Observation"],
-        dateRangeFrom: new Date("2026-01-01"),
-        dateRangeTo: new Date("2026-12-31"),
-        expiresAt: new Date(Date.now() + 10 * 24 * 60 * 60 * 1000),
-        status: "REVOKED",
-        grantedAt: new Date("2026-08-01"),
-        revokedAt: new Date("2026-09-01"),
-      });
-    }
-
-    // 4. Seed expired consent
-    const expiredConsentExists = await ConsentArtifact.findOne({
-      consentId: "CONSENT-EXPIRED-PAST-03",
-    });
-    if (!expiredConsentExists) {
-      await ConsentArtifact.create({
-        consentId: "CONSENT-EXPIRED-PAST-03",
-        patientId: patient._id,
-        requesterDoctorId: doctor._id,
-        requesterFacility: "Apollo Clinics, Indiranagar",
-        purpose: "Historical General Health Checkup",
-        hiTypes: ["Immunization"],
-        dateRangeFrom: new Date("2025-01-01"),
-        dateRangeTo: new Date("2025-12-31"),
-        expiresAt: new Date("2026-01-01"), // In past
-        status: "GRANTED",
-        grantedAt: new Date("2025-01-05"),
-      });
-    }
-
-    // 5. Seed pending consent request for Cardiology Review
-    const pendingConsentExists = await ConsentArtifact.findOne({
-      consentId: "CONSENT-PENDING-CARDIOLOGY-04",
-    });
-    if (!pendingConsentExists) {
-      await ConsentArtifact.create({
-        consentId: "CONSENT-PENDING-CARDIOLOGY-04",
-        patientId: patient._id,
-        requesterDoctorId: doctor._id,
-        requesterFacility: "Apollo Clinics, Indiranagar",
-        purpose: "Post-Operative Remote Cardiac Monitoring",
-        hiTypes: ["DiagnosticReport", "Observation", "Encounter"],
-        approvedHiTypes: [],
-        dateRangeFrom: new Date("2026-08-01"),
-        dateRangeTo: new Date("2026-12-31"),
-        expiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000), // 14 days
-        status: "PENDING",
-        version: 1,
-        decisionHistory: [
-          {
-            action: "REQUESTED",
-            actorId: doctor._id,
-            actorRole: "doctor",
-            actorName: doctor.name,
-            timestamp: new Date(),
-            note: "Requested comprehensive cardiac records for telemetry review.",
-          },
-        ],
-      });
-    }
-
-    // 6. Seed denied consent request for Dermatology
-    const deniedConsentExists = await ConsentArtifact.findOne({
-      consentId: "CONSENT-DENIED-DERM-05",
-    });
-    if (!deniedConsentExists) {
-      await ConsentArtifact.create({
-        consentId: "CONSENT-DENIED-DERM-05",
-        patientId: patient._id,
-        requesterDoctorId: doctor._id,
-        requesterFacility: "Apollo Clinics, Indiranagar",
-        purpose: "Dermatological Allergy Evaluation",
-        hiTypes: ["Observation", "Immunization"],
-        approvedHiTypes: [],
-        dateRangeFrom: new Date("2026-01-01"),
-        dateRangeTo: new Date("2026-06-30"),
-        expiresAt: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000),
-        status: "DENIED",
-        version: 1,
-        deniedAt: new Date("2026-10-15"),
-        decisionHistory: [
-          {
-            action: "REQUESTED",
-            actorId: doctor._id,
-            actorRole: "doctor",
-            actorName: doctor.name,
-            timestamp: new Date("2026-10-14"),
-            note: "Requested records for allergy consultation.",
-          },
-          {
-            action: "DENIED",
-            actorId: patient._id,
-            actorRole: "patient",
-            actorName: patient.name,
-            timestamp: new Date("2026-10-15"),
-            note: "Patient opted not to share allergy immunization history.",
-          },
-        ],
-      });
-    }
 
     // 5. Seed Lab Order for Max Diagnostic Laboratory
     const labOrderExists = await LabOrder.findOne({ orderId: "LAB-ORD-2026-001" });
@@ -674,96 +531,6 @@ export async function seedDemoIdentities(): Promise<void> {
       }
     }
 
-    // 8. Seed initial verified facilities for Step 9 Onboarding
-    const adminUser = await User.findOne({ role: "admin" });
-    if (adminUser) {
-      const demoFacilities = [
-        {
-          facilityId: "IN0710000001",
-          name: "Max Super Speciality Hospital, Saket",
-          type: "HOSPITAL" as const,
-          status: "APPROVED" as const,
-          city: "New Delhi",
-          state: "Delhi",
-          contactPhone: "+91-11-26515050",
-          contactEmail: "admin@maxhealth.demo",
-          demoHfrId: "IN0710000001",
-          registeredBy: adminUser._id,
-          registeredByName: adminUser.name,
-          verifiedBy: adminUser._id,
-          verifiedByName: adminUser.name,
-          verifiedAt: new Date(),
-        },
-        {
-          facilityId: "IN2910000002",
-          name: "Apollo Clinics, Indiranagar",
-          type: "CLINIC" as const,
-          status: "APPROVED" as const,
-          city: "Bengaluru",
-          state: "Karnataka",
-          contactPhone: "+91-80-25219900",
-          contactEmail: "blr.indiranagar@apollo.demo",
-          demoHfrId: "IN2910000002",
-          registeredBy: adminUser._id,
-          registeredByName: adminUser.name,
-          verifiedBy: adminUser._id,
-          verifiedByName: adminUser.name,
-          verifiedAt: new Date(),
-        },
-        {
-          facilityId: "IN3610000003",
-          name: "Apollo Health City",
-          type: "PHARMACY" as const,
-          status: "APPROVED" as const,
-          city: "Hyderabad",
-          state: "Telangana",
-          contactPhone: "+91-40-23607777",
-          contactEmail: "pharmacy@apollohealth.demo",
-          demoHfrId: "IN3610000003",
-          registeredBy: adminUser._id,
-          registeredByName: adminUser.name,
-          verifiedBy: adminUser._id,
-          verifiedByName: adminUser.name,
-          verifiedAt: new Date(),
-        },
-        {
-          facilityId: "IN0710000004",
-          name: "Dr. Lal PathLabs, Delhi Central",
-          type: "LABORATORY" as const,
-          status: "APPROVED" as const,
-          city: "New Delhi",
-          state: "Delhi",
-          contactPhone: "+91-11-39885050",
-          contactEmail: "central.lab@drlal.demo",
-          demoHfrId: "IN0710000004",
-          registeredBy: adminUser._id,
-          registeredByName: adminUser.name,
-          verifiedBy: adminUser._id,
-          verifiedByName: adminUser.name,
-          verifiedAt: new Date(),
-        },
-        {
-          facilityId: "IN0710000099",
-          name: "Sunrise Community Diagnostic Centre",
-          type: "LABORATORY" as const,
-          status: "PENDING" as const,
-          city: "New Delhi",
-          state: "Delhi",
-          contactPhone: "+91-11-45009911",
-          contactEmail: "onboarding@sunriselab.demo",
-          demoHfrId: "IN0710000099",
-          registeredBy: adminUser._id,
-          registeredByName: adminUser.name,
-        },
-      ];
-
-      for (const fac of demoFacilities) {
-        const facExists = await Facility.findOne({ facilityId: fac.facilityId });
-        if (!facExists) {
-          await Facility.create(fac);
-        }
-      }
-    }
   }
 }
 
