@@ -84,6 +84,52 @@ describe("SwasthSaarthi — Step 5: Secure DAL and Role-Based Access Control Sui
 
     assert.ok(patientUser && doctorUser && labUser && pharmacyUser && adminUser);
 
+    // Set up isolated test consents required for tests 4, 5, 6
+    await ConsentArtifact.deleteMany({ patientId: patientUser._id, requesterDoctorId: doctorUser._id });
+    await ConsentArtifact.create({
+      consentId: "CONSENT-ACTIVE-CARDIOLOGY-01",
+      patientId: patientUser._id,
+      requesterDoctorId: doctorUser._id,
+      requesterFacility: "Apollo Clinics, Indiranagar",
+      purpose: "Cardiology Review",
+      hiTypes: ["DiagnosticReport", "Encounter"],
+      approvedHiTypes: ["DiagnosticReport", "Encounter"],
+      dateRangeFrom: new Date("2026-09-01"),
+      dateRangeTo: new Date("2026-12-31"),
+      expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      status: "GRANTED",
+      grantedAt: new Date("2026-10-01"),
+    });
+
+    await ConsentArtifact.create({
+      consentId: "CONSENT-REVOKED-OPHTHAL-02",
+      patientId: patientUser._id,
+      requesterDoctorId: doctorUser._id,
+      requesterFacility: "Apollo Clinics, Indiranagar",
+      purpose: "Ophthalmology Consultation",
+      hiTypes: ["Observation"],
+      dateRangeFrom: new Date("2026-01-01"),
+      dateRangeTo: new Date("2026-12-31"),
+      expiresAt: new Date(Date.now() + 10 * 24 * 60 * 60 * 1000),
+      status: "REVOKED",
+      grantedAt: new Date("2026-08-01"),
+      revokedAt: new Date("2026-09-01"),
+    });
+
+    await ConsentArtifact.create({
+      consentId: "CONSENT-EXPIRED-PAST-03",
+      patientId: patientUser._id,
+      requesterDoctorId: doctorUser._id,
+      requesterFacility: "Apollo Clinics, Indiranagar",
+      purpose: "Historical General Health Checkup",
+      hiTypes: ["Immunization"],
+      dateRangeFrom: new Date("2025-01-01"),
+      dateRangeTo: new Date("2025-12-31"),
+      expiresAt: new Date("2026-01-01"),
+      status: "GRANTED",
+      grantedAt: new Date("2025-01-05"),
+    });
+
     // Build principals
     patientPrincipal = {
       id: patientUser._id.toString(),

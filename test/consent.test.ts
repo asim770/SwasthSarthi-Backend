@@ -82,7 +82,24 @@ describe("SwasthSaarthi — Step 6: Consent Management System Suite", () => {
       });
     }
 
-    patientUser = (await User.findOne({ abhaAddress: "rahul.verma@sbx" }))!;
+    // Ensure primary test patient exists
+    let firstPatient = await User.findOne({ abhaAddress: "patient.consent.test@sbx" });
+    if (!firstPatient) {
+      firstPatient = await User.create({
+        abhaId: "44-9999-5678-1100",
+        abhaAddress: "patient.consent.test@sbx",
+        name: "Test Patient One",
+        role: "patient",
+        patientId: "PID-CONSENT-001",
+        isActive: true,
+        phone: "+91-9876543299",
+        email: "test.patient.consent@isolated.test",
+        gender: "Male",
+        dateOfBirth: "1990-01-01",
+      });
+    }
+
+    patientUser = firstPatient;
     otherPatientUser = secondPatient;
     doctorUser = (await User.findOne({ abhaAddress: "dr.ananya@hpr.sbx" }))!;
     otherDoctorUser = secondDoctor;

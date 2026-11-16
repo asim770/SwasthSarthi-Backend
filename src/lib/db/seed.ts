@@ -11,6 +11,18 @@ import { hashPassword } from "@/lib/security/crypto";
 
 export const DEMO_IDENTITIES = [
   {
+    abhaId: "14-1234-5678-9012",
+    abhaAddress: "rahul.verma@sbx",
+    name: "Rahul Verma",
+    role: "patient" as const,
+    patientId: "PID-10000001",
+    isActive: true,
+    phone: "+91-9876543210",
+    email: "rahul.verma@synthetic.demo",
+    gender: "Male",
+    dateOfBirth: "1988-04-12",
+  },
+  {
     abhaId: "HPR-DEL-2026-9912",
     abhaAddress: "dr.ananya@hpr.sbx",
     name: "Dr. Ananya Sharma",
@@ -93,7 +105,7 @@ export async function seedDemoIdentities(): Promise<void> {
       }
       if (identity.role === "patient") {
         const targetPid = (identity as { patientId?: string }).patientId;
-        if (!existing.patientId && targetPid) {
+        if (targetPid && existing.patientId !== targetPid) {
           existing.patientId = targetPid;
           needsSave = true;
         }

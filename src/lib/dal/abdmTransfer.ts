@@ -171,49 +171,17 @@ export async function getAuthorizedTimeline(
     });
 
     if (!activeConsents || activeConsents.length === 0) {
-      // Auto-establish direct care OPD clinical consultation consent for verified patient
-      const expiresAt = new Date(now.getTime() + 60 * 24 * 60 * 60 * 1000); // 60 days
-      const opdConsent = await ConsentArtifact.create({
-        consentId: `CNS-OPD-${Date.now().toString(36).toUpperCase()}-${Math.floor(100 + Math.random() * 900)}`,
-        patientId: patientObjectId,
-        requesterDoctorId: new mongoose.Types.ObjectId(principal.id),
-        requesterFacility: principal.facility || "Apollo Clinics, Indiranagar",
-        purpose: "OPD Clinical Consultation, Diagnosis & Longitudinal History Review",
-        hiTypes: [
-          "DiagnosticReport",
-          "Observation",
-          "MedicationRequest",
-          "MedicationDispense",
-          "Encounter",
-          "Immunization",
-          "DocumentReference",
-        ],
-        approvedHiTypes: [
-          "DiagnosticReport",
-          "Observation",
-          "MedicationRequest",
-          "MedicationDispense",
-          "Encounter",
-          "Immunization",
-          "DocumentReference",
-        ],
-        dateRangeFrom: new Date("2020-01-01"),
-        dateRangeTo: new Date("2030-12-31"),
-        status: "GRANTED",
-        grantedAt: now,
-        expiresAt,
-        decisionHistory: [
-          {
-            action: "APPROVED",
-            actorId: patientObjectId,
-            actorRole: "patient",
-            actorName: patientUser.name,
-            timestamp: now,
-            note: "Patient presented Patient ID for clinical consultation. Direct care consent established.",
-          },
-        ],
+      await logAuditEvent({
+        action: "READ_PATIENT_TIMELINE_DENIED",
+        principal,
+        targetResourceType: "HealthRecord",
+        targetPatientId,
+        outcome: "DENIED",
+        denialReason: "No active electronic consent found for this patient and doctor.",
       });
-      activeConsents = [opdConsent];
+      throw new ConsentRequiredError(
+        "No active electronic consent found for this patient and doctor."
+      );
     }
 
     // Determine consent boundaries

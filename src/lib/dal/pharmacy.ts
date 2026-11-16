@@ -559,13 +559,14 @@ export async function recordDispensation(
   });
 
   // 8. Persist MedicationDispense into SourceInstitutionRecord for ABDM exchange
+  const patientAbha = (updatedPrescription as any).patientAbhaId || (updatedPrescription as any).patientAbhaAddress || "patient@sbx";
   await SourceInstitutionRecord.create({
     recordId: `SRC-DISP-${dispenseId}`,
     institutionId: "HIP-APOLLO-002",
     institutionName: principal.facility,
     institutionType: "clinic",
-    patientAbhaId: (updatedPrescription as any).patientAbhaId || undefined,
-    patientAbhaAddress: (updatedPrescription as any).patientAbhaAddress || "patient@sbx",
+    patientAbhaId: patientAbha,
+    patientAbhaAddress: (updatedPrescription as any).patientAbhaAddress || patientAbha,
     patientName: updatedPrescription.patientName,
     careContextId: `CARE-CTX-RX-${prescriptionId}`,
     careContextDescription: `Dispensing Event: ${updatedPrescription.medications[0]?.name || "Medication"}`,
@@ -573,7 +574,7 @@ export async function recordDispensation(
     recordDate: now,
     status: "completed",
     fhirResource: fhirMedicationDispense,
-    isMockData: true,
+    isMockData: false,
   });
 
   // 9. Also register unified local HealthRecord for patient timeline and records

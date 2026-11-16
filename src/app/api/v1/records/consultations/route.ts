@@ -29,12 +29,15 @@ const consultationSchema = z.object({
     .optional(),
   recommendedTests: z
     .array(
-      z.object({
-        testName: z.string().min(1, "Test name is required"),
-        testCode: z.string().optional(),
-        priority: z.enum(["ROUTINE", "URGENT", "STAT"]).optional(),
-        instructions: z.string().optional(),
-      })
+      z.union([
+        z.string().transform((testName) => ({ testName })),
+        z.object({
+          testName: z.string().min(1, "Test name is required"),
+          testCode: z.string().optional(),
+          priority: z.enum(["ROUTINE", "URGENT", "STAT"]).optional(),
+          instructions: z.string().optional(),
+        }),
+      ])
     )
     .optional(),
   followUpDate: z.string().optional(),
