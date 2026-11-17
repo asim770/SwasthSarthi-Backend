@@ -362,6 +362,19 @@ export async function reviewPractitioner(
     },
   });
 
+  // Notify practitioner of verification decision
+  try {
+    const { sendHealthcareEventNotification } = await import("@/lib/services/notificationService");
+    await sendHealthcareEventNotification({
+      type: "PRACTITIONER_REVIEWED",
+      targetUserId: user._id,
+      status: newStatus,
+      metadata: { reason: input.reason },
+    });
+  } catch (notifErr) {
+    console.warn("Practitioner review notification notice:", notifErr);
+  }
+
   return {
     _id: user._id,
     name: user.name,

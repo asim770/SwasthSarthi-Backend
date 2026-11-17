@@ -15,7 +15,7 @@ export type NotificationDeliveryStatus = "PENDING" | "DELIVERED" | "FAILED";
 export interface INotification extends Document {
   notificationId: string;
   recipientId: mongoose.Types.ObjectId;
-  recipientAbha: string;
+  recipientAbha?: string;
   recipientRole?: string;
   category: NotificationCategory;
   title: string;
@@ -49,9 +49,10 @@ const NotificationSchema = new Schema<INotification>(
     },
     recipientAbha: {
       type: String,
-      required: true,
+      required: false,
       lowercase: true,
       trim: true,
+      default: "",
       index: true,
     },
     recipientRole: {

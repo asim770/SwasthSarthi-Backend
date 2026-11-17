@@ -600,10 +600,24 @@ export async function createDoctorConsultation(
     recipientRole: "patient",
     category: "CONSULTATION",
     title: "New Doctor Consultation Report",
-    message: `Dr. ${principal.name} has added a new consultation report (${input.diagnosis}) to your health record.`,
+    message: `Dr. ${principal.name} has added a new consultation report to your health record.`,
     relatedResourceId: recordId,
     relatedResourceType: "Encounter",
   });
+
+  // 6. Patient prescription notification if medications prescribed
+  if (prescriptionId) {
+    await createNotification({
+      recipientId: patientObjectId,
+      recipientAbha: patient.abhaAddress || patient.email || "patient@sbx",
+      recipientRole: "patient",
+      category: "PRESCRIPTION",
+      title: "New Prescription Issued",
+      message: `Dr. ${principal.name} issued a new prescription for your health record.`,
+      relatedResourceId: prescriptionId,
+      relatedResourceType: "MedicationRequest",
+    }).catch(() => {});
+  }
 
   return {
     consultationRecord,

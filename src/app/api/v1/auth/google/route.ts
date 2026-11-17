@@ -192,8 +192,18 @@ export async function POST(request: NextRequest) {
     let isNewlyCreated = false;
 
     if (!user) {
-      // Auto-provision Patient account whether mode was 'login' or 'register'
-      // Seamless SSO experience: users can sign in or register with Google without friction
+      if (mode === "login") {
+        return apiError(
+          new Error("No account found matching this Google profile. Please register first."),
+          request,
+          {
+            status: 404,
+            code: "ACCOUNT_NOT_FOUND",
+            fallbackMessage: "No account found matching this Google profile. Please register first.",
+          }
+        );
+      }
+
       isNewlyCreated = true;
       const patientId = await generateUniquePatientId();
       const username = normalizedEmail.split("@")[0].replace(/[^a-zA-Z0-9]/g, "").toLowerCase() || "patient";

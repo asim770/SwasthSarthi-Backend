@@ -8,7 +8,7 @@ import { connectToDatabase } from "@/lib/db/connect";
 
 export interface CreateNotificationParams {
   recipientId: string | mongoose.Types.ObjectId;
-  recipientAbha: string;
+  recipientAbha?: string;
   recipientRole?: string;
   category: NotificationCategory;
   title: string;
@@ -27,9 +27,16 @@ export async function createNotification(
 ): Promise<{ notification: INotification; duplicate: boolean }> {
   await connectToDatabase();
 
+  const recipientObjId =
+    typeof params.recipientId === "string"
+      ? new mongoose.Types.ObjectId(params.recipientId)
+      : params.recipientId;
+
+  const abhaNormalized = (params.recipientAbha || "").toLowerCase();
+
   const key =
     params.idempotencyKey ||
-    `NOTIF-KEY-${params.recipientAbha}-${params.category}-${params.relatedResourceId || Date.now()}`;
+    `NOTIF-KEY-${recipientObjId}-${params.category}-${params.relatedResourceId || Date.now()}`;
 
   // 1. Idempotency check: prevent duplicate queue or event processing
   const existing = await Notification.findOne({ idempotencyKey: key });
@@ -46,14 +53,9 @@ export async function createNotification(
     }
   }
 
-  const recipientObjId =
-    typeof params.recipientId === "string"
-      ? new mongoose.Types.ObjectId(params.recipientId)
-      : params.recipientId;
-
   const notification = await Notification.create({
     recipientId: recipientObjId,
-    recipientAbha: params.recipientAbha.toLowerCase(),
+    recipientAbha: abhaNormalized,
     recipientRole: params.recipientRole,
     category: params.category,
     title: params.title.trim(),
@@ -78,17 +80,14 @@ function buildRecipientFilter(principal: AuthenticatedPrincipal): Record<string,
   } else if (principal.id) {
     orConditions.push({ recipientId: principal.id });
   }
-  if (principal.abhaAddress) {
-    orConditions.push({ recipientAbha: principal.abhaAddress.toLowerCase() });
+  if (principal.abhaAddress && principal.abhaAddress.trim()) {
+    orConditions.push({ recipientAbha: principal.abhaAddress.toLowerCase().trim() });
   }
-  if (principal.abhaId) {
-    orConditions.push({ recipientAbha: principal.abhaId.toLowerCase() });
-  }
-  if (principal.patientId) {
-    orConditions.push({ recipientAbha: principal.patientId.toLowerCase() });
+  if (principal.patientId && principal.patientId.trim()) {
+    orConditions.push({ recipientAbha: principal.patientId.toLowerCase().trim() });
   }
   if (orConditions.length === 0) {
-    orConditions.push({ recipientAbha: "unknown" });
+    return { _id: new mongoose.Types.ObjectId() };
   }
   return { $or: orConditions };
 }
@@ -109,60 +108,6 @@ export async function getNotifications(
   await connectToDatabase();
 
   const baseFilter = buildRecipientFilter(principal);
-
-  // If user has 0 notifications in the database, seed standard onboarding activity alerts
-  const totalCountInDb = await Notification.countDocuments(baseFilter);
-  if (totalCountInDb === 0) {
-    const recipientObjId = mongoose.isValidObjectId(principal.id)
-      ? new mongoose.Types.ObjectId(principal.id)
-      : new mongoose.Types.ObjectId();
-    const recipientAbha = (principal.abhaAddress || principal.patientId || principal.abhaId || "patient@abdm").toLowerCase();
-
-    const initialSeed = [
-      {
-        recipientId: recipientObjId,
-        recipientAbha,
-        recipientRole: principal.role || "patient",
-        category: "CONSENT" as const,
-        title: "Consent Granted",
-        message: "Apollo Hospital accessed diagnostic records",
-        isRead: false,
-        deliveryStatus: "DELIVERED" as const,
-        idempotencyKey: `SEED-CONSENT-${recipientAbha}-${principal.id}`,
-        createdAt: new Date(Date.now() - 10 * 60 * 1000),
-      },
-      {
-        recipientId: recipientObjId,
-        recipientAbha,
-        recipientRole: principal.role || "patient",
-        category: "LAB_REPORT" as const,
-        title: "New Lab Report",
-        message: "Metabolic & Lipid Panel verified",
-        isRead: false,
-        deliveryStatus: "DELIVERED" as const,
-        idempotencyKey: `SEED-LAB-${recipientAbha}-${principal.id}`,
-        createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000),
-      },
-      {
-        recipientId: recipientObjId,
-        recipientAbha,
-        recipientRole: principal.role || "patient",
-        category: "ONBOARDING" as const,
-        title: "ABDM Care Context Linked",
-        message: "Max Healthcare linked 3 FHIR resources",
-        isRead: false,
-        deliveryStatus: "DELIVERED" as const,
-        idempotencyKey: `SEED-ABDM-${recipientAbha}-${principal.id}`,
-        createdAt: new Date(Date.now() - 24 * 60 * 60 * 1000),
-      },
-    ];
-
-    try {
-      await Notification.insertMany(initialSeed, { ordered: false });
-    } catch (_err) {
-      // Ignore if concurrent request seeded or unique key conflict
-    }
-  }
 
   const queryFilter: Record<string, unknown> = { ...baseFilter };
   if (params.unreadOnly) {
@@ -276,3 +221,56 @@ export async function markAllNotificationsAsRead(
 
   return { markedCount: res.modifiedCount };
 }
+
+/**
+ * Delete or dismiss a single notification with strict ownership verification
+ */
+export async function deleteNotification(
+  principal: AuthenticatedPrincipal,
+  notificationId: string
+): Promise<{ success: boolean }> {
+  assertSafeIdentifier(notificationId, "notificationId");
+  await connectToDatabase();
+
+  const notification = await Notification.findOne({
+    $or: [
+      { notificationId },
+      ...(mongoose.isValidObjectId(notificationId) ? [{ _id: new mongoose.Types.ObjectId(notificationId) }] : []),
+    ],
+  });
+
+  if (!notification) {
+    throw new NotFoundError(`Notification '${notificationId}' not found.`);
+  }
+
+  const principalAbha = (principal.abhaAddress || principal.patientId || principal.abhaId || "").toLowerCase();
+  const notifAbha = (notification.recipientAbha || "").toLowerCase();
+  const matchesId = notification.recipientId?.toString() === principal.id;
+  const matchesAbha = Boolean(principalAbha && notifAbha && principalAbha === notifAbha);
+
+  if (!matchesId && !matchesAbha) {
+    await logAuditEvent({
+      action: "NOTIFICATION_DELETE_DENIED",
+      principal,
+      targetResourceType: "Notification",
+      targetResourceId: notificationId,
+      outcome: "DENIED",
+      denialReason: "User attempted to delete another user's notification.",
+    });
+    throw new ForbiddenError("Access denied. You may only manage your own notifications.");
+  }
+
+  await notification.deleteOne();
+
+  await logAuditEvent({
+    action: "NOTIFICATION_DELETED",
+    principal,
+    targetResourceType: "Notification",
+    targetResourceId: notificationId,
+    outcome: "ALLOWED",
+  });
+
+  return { success: true };
+}
+
+export { sendHealthcareEventNotification } from "@/lib/services/notificationService";

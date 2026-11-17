@@ -24,6 +24,7 @@ describe("SwasthSaarthi — Authentication System Upgrade Suite", () => {
           "test.google.patient@example.com",
           "test.manual.patient@example.com",
           "test.linking.patient@example.com",
+          "unregistered@example.com",
         ],
       },
     });

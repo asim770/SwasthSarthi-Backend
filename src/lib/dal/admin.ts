@@ -5,39 +5,123 @@ import { ConsentArtifact } from "@/lib/db/models/ConsentArtifact";
 import { AuthenticatedPrincipal } from "./types";
 import {
   NotFoundError,
+  ForbiddenError,
 } from "./errors";
 import { requireAllowedRole } from "./policies";
 import { assertSafeIdentifier } from "./sanitizer";
 import { logAuditEvent } from "./audit";
 import { connectToDatabase } from "@/lib/db/connect";
 
+export interface ListUsersAdminOptions {
+  page?: number;
+  limit?: number;
+  role?: string;
+  status?: string;
+  verificationStatus?: string;
+  search?: string;
+}
+
+export interface AdminUsersResult {
+  users: Partial<IUser>[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}
+
 /**
  * List registered user accounts for administrative management
  * Returns strictly administrative metadata without any clinical details
+ * Supports server-side pagination, debounced search, role filtering, and status filtering
  */
 export async function listUsersForAdmin(
-  principal: AuthenticatedPrincipal
-): Promise<Partial<IUser>[]> {
+  principal: AuthenticatedPrincipal,
+  options?: ListUsersAdminOptions
+): Promise<AdminUsersResult> {
   requireAllowedRole(principal, ["admin"], "Only administrators may view user directories.");
   await connectToDatabase();
 
-  const users = await User.find({})
-    .select("_id abhaId abhaAddress name role isActive phone facility specialization createdAt updatedAt")
-    .sort({ createdAt: -1 });
+  const query: Record<string, unknown> = {};
+
+  if (options?.role && options.role.toUpperCase() !== "ALL") {
+    const roleLower = options.role.toLowerCase();
+    const validRoles = ["patient", "doctor", "laboratory", "pharmacy", "admin"];
+    if (validRoles.includes(roleLower)) {
+      query.role = roleLower;
+    }
+  }
+
+  if (options?.status && options.status.toUpperCase() !== "ALL") {
+    const statusUpper = options.status.toUpperCase();
+    if (statusUpper === "ACTIVE") {
+      query.isActive = true;
+    } else if (statusUpper === "SUSPENDED") {
+      query.isActive = false;
+    }
+  }
+
+  if (options?.verificationStatus && options.verificationStatus.toUpperCase() !== "ALL") {
+    query.verificationStatus = options.verificationStatus.toUpperCase();
+  }
+
+  if (options?.search && options.search.trim()) {
+    const escaped = options.search.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    query.$or = [
+      { name: { $regex: escaped, $options: "i" } },
+      { email: { $regex: escaped, $options: "i" } },
+      { patientId: { $regex: escaped, $options: "i" } },
+      { abhaAddress: { $regex: escaped, $options: "i" } },
+      { phone: { $regex: escaped, $options: "i" } },
+      { facility: { $regex: escaped, $options: "i" } },
+      { specialization: { $regex: escaped, $options: "i" } },
+    ];
+  }
+
+  const page = Math.max(1, options?.page || 1);
+  const limit = Math.min(50, Math.max(1, options?.limit || 10));
+  const skip = (page - 1) * limit;
+
+  const [users, total] = await Promise.all([
+    User.find(query)
+      .select(
+        "_id patientId abhaId abhaAddress name email phone role isActive verificationStatus facility specialization createdAt updatedAt"
+      )
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit),
+    User.countDocuments(query),
+  ]);
+
+  const totalPages = Math.ceil(total / limit) || 1;
 
   await logAuditEvent({
     action: "ADMIN_LIST_USERS",
     principal,
     targetResourceType: "User",
     outcome: "ALLOWED",
-    metadata: { count: users.length },
+    metadata: {
+      count: users.length,
+      total,
+      page,
+      limit,
+      roleFilter: options?.role || "ALL",
+      statusFilter: options?.status || "ALL",
+      hasSearch: Boolean(options?.search),
+    },
   });
 
-  return users;
+  return {
+    users,
+    total,
+    page,
+    limit,
+    totalPages,
+  };
 }
 
 /**
  * Update user account status (active/suspended)
+ * Prevents self-suspension by administrator
  */
 export async function updateUserStatus(
   principal: AuthenticatedPrincipal,
@@ -46,6 +130,19 @@ export async function updateUserStatus(
 ): Promise<Partial<IUser>> {
   requireAllowedRole(principal, ["admin"], "Only administrators may modify user account status.");
   assertSafeIdentifier(targetUserId, "targetUserId");
+
+  if (principal.id === targetUserId) {
+    await logAuditEvent({
+      action: "ADMIN_SELF_STATUS_CHANGE_BLOCKED",
+      principal,
+      targetResourceType: "User",
+      targetResourceId: targetUserId,
+      outcome: "DENIED",
+      denialReason: "Administrator attempted to modify their own active account status.",
+    });
+    throw new ForbiddenError("Administrators cannot modify their own active account status.");
+  }
+
   await connectToDatabase();
 
   const user = await User.findById(targetUserId);
@@ -75,10 +172,13 @@ export async function updateUserStatus(
 
   return {
     _id: user._id,
+    patientId: user.patientId,
     abhaId: user.abhaId,
     name: user.name,
+    email: user.email,
     role: user.role,
     isActive: user.isActive,
+    verificationStatus: user.verificationStatus,
   };
 }
 

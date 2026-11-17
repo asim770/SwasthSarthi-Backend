@@ -613,7 +613,7 @@ export async function recordDispensation(
         recipientRole: "patient",
         category: "DISPENSE",
         title: "Medicine Dispensed",
-        message: `${quantityToDispense} units of ${updatedPrescription.medications[0]?.name || "Medication"} were dispensed by ${principal.facility}.`,
+        message: `Your prescription has been dispensed by ${principal.facility}.`,
         relatedResourceId: prescriptionId,
         relatedResourceType: "MedicationDispense",
       });

@@ -234,6 +234,31 @@ export async function POST(request: NextRequest) {
         },
       });
 
+      // Dispatch notification to administrators for professional account review
+      try {
+        const { sendHealthcareEventNotification } = await import("@/lib/services/notificationService");
+        const eventType =
+          role === "doctor"
+            ? "DOCTOR_REGISTERED"
+            : role === "laboratory"
+            ? "LABORATORY_REGISTERED"
+            : "PHARMACY_REGISTERED";
+
+        await sendHealthcareEventNotification({
+          type: eventType,
+          actorName: name,
+          targetUserId: newUser._id,
+          facility: facilityName,
+          metadata: {
+            role,
+            email: normalizedEmail,
+            facility: facilityName,
+          },
+        });
+      } catch (notifErr) {
+        console.warn("Practitioner registration notification notice:", notifErr);
+      }
+
       return apiSuccess(
         {
           requiresVerification: false,
