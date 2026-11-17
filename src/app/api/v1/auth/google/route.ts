@@ -179,63 +179,22 @@ export async function POST(request: NextRequest) {
     const normalizedEmail = googlePayload.email.toLowerCase().trim();
     const googleSub = googlePayload.sub.trim();
 
-    // 1. Identify account using verified Google subject identifier
-    let user = await User.findOne({ googleSubject: googleSub });
+    // 1. Identify account using verified Google subject identifier OR verified email
+    const emailEscaped = normalizedEmail.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    let user = await User.findOne({
+      $or: [
+        { googleSubject: googleSub },
+        { email: normalizedEmail },
+        { email: { $regex: new RegExp(`^${emailEscaped}$`, "i") } },
+      ],
+    });
+
+    let isNewlyCreated = false;
 
     if (!user) {
-      // 2. Check if an account exists with the same email
-      const existingEmailUser = await User.findOne({ email: normalizedEmail });
-
-      if (existingEmailUser) {
-        // If an existing password-based account matches the email, do not silently merge
-        // Require secure account-linking process
-        if (existingEmailUser.googleSubject && existingEmailUser.googleSubject !== googleSub) {
-          return apiError(
-            new Error("This email is already linked to a different Google account."),
-            request,
-            {
-              status: 409,
-              code: "GOOGLE_ACCOUNT_CONFLICT",
-              fallbackMessage: "This email is associated with a different Google account.",
-            }
-          );
-        }
-
-        if (!existingEmailUser.googleSubject) {
-          // Account was registered with password and not yet linked to Google.
-          // Since Google has cryptographically verified the email address, securely link Google identity
-          existingEmailUser.googleSubject = googleSub;
-          if (!existingEmailUser.authProviders?.includes("google")) {
-            existingEmailUser.authProviders = [...(existingEmailUser.authProviders || []), "google"];
-          }
-          if (!existingEmailUser.patientId) {
-            existingEmailUser.patientId = await generateUniquePatientId();
-          }
-          existingEmailUser.isEmailVerified = true;
-          existingEmailUser.lastLoginAt = new Date();
-          await existingEmailUser.save();
-        }
-
-        user = existingEmailUser;
-      }
-    }
-
-    // 3. Handle account not found
-    if (!user) {
-      if (mode === "login") {
-        return apiError(
-          new Error("No SwasthSaarthi patient account found for this Google identity. Please sign up first."),
-          request,
-          {
-            status: 404,
-            code: "ACCOUNT_NOT_FOUND",
-            fallbackMessage:
-              "No SwasthSaarthi patient account is associated with this Google identity. Please click 'Sign up with Google' to register.",
-          }
-        );
-      }
-
-      // Patient Registration via Google OAuth
+      // Auto-provision Patient account whether mode was 'login' or 'register'
+      // Seamless SSO experience: users can sign in or register with Google without friction
+      isNewlyCreated = true;
       const patientId = await generateUniquePatientId();
       const username = normalizedEmail.split("@")[0].replace(/[^a-zA-Z0-9]/g, "").toLowerCase() || "patient";
       const randSuffix = crypto.randomInt(1000, 9999);
@@ -266,37 +225,65 @@ export async function POST(request: NextRequest) {
             changedBy: new mongoose.Types.ObjectId(),
             changedByName: "Google Identity Provider",
             changedAt: new Date(),
-            reason: `Patient account registered via Google OAuth with unique ID ${patientId}`,
+            reason: `Patient account auto-provisioned via Google OAuth with unique ID ${patientId}`,
           },
         ],
       });
     } else {
-      // Existing user: ensure patientId is assigned (for legacy users) and update lastLoginAt
+      // Existing user: check if conflicting googleSubject
+      if (user.googleSubject && user.googleSubject !== googleSub) {
+        return apiError(
+          new Error("This email is already linked to a different Google account."),
+          request,
+          {
+            status: 409,
+            code: "GOOGLE_ACCOUNT_CONFLICT",
+            fallbackMessage: "This email is associated with a different Google account.",
+          }
+        );
+      }
+
+      // Existing user: ensure patientId is assigned and update lastLoginAt + googleSubject
+      const updates: Record<string, any> = {
+        lastLoginAt: new Date(),
+        isEmailVerified: true,
+      };
+      if (!user.googleSubject) {
+        updates.googleSubject = googleSub;
+      }
       if (!user.patientId) {
-        user.patientId = await generateUniquePatientId();
+        updates.patientId = await generateUniquePatientId();
       }
-      if (!user.authProviders?.includes("google")) {
-        user.authProviders = [...(user.authProviders || []), "google"];
+      if (!user.emailVerifiedAt) {
+        updates.emailVerifiedAt = new Date();
       }
-      user.lastLoginAt = new Date();
-      if (!user.isEmailVerified) {
-        user.isEmailVerified = true;
-        user.emailVerifiedAt = new Date();
+
+      await User.updateOne(
+        { _id: user._id },
+        {
+          $set: updates,
+          $addToSet: { authProviders: "google" },
+        }
+      );
+
+      // Refresh in-memory user
+      const refreshedUser = await User.findById(user._id);
+      if (refreshedUser) {
+        user = refreshedUser;
       }
-      await user.save();
     }
 
-    // 4. Establish application session
+    // 2. Establish application session
     const { csrfToken, cookieHeaders } = await createSession(
       user._id,
       user.role,
       request
     );
 
-    // 5. Audit log
+    // 3. Audit log
     try {
       await logAuditEvent({
-        action: "AUTH_LOGIN_SUCCESS",
+        action: isNewlyCreated ? "PATIENT_AUTO_REGISTERED" : "AUTH_LOGIN_SUCCESS",
         principal: {
           id: user._id.toString(),
           role: user.role,
@@ -332,9 +319,12 @@ export async function POST(request: NextRequest) {
           isEmailVerified: user.isEmailVerified,
         },
         patientId: user.patientId,
+        isNewUser: isNewlyCreated,
         csrfToken,
         authMethod: "google",
-        message: `Welcome, ${user.name}! Your Patient ID is ${user.patientId}.`,
+        message: isNewlyCreated
+          ? `Welcome to SwasthSaarthi, ${user.name}! Your Patient ID is ${user.patientId}.`
+          : `Welcome back, ${user.name}!`,
       },
       request,
       {

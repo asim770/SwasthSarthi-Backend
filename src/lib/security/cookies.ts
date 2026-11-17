@@ -15,7 +15,7 @@ export function buildSessionCookie(token: string, maxAge: number = SESSION_MAX_A
     `${SESSION_COOKIE_NAME}=${token}`,
     "HttpOnly",
     "Path=/",
-    "SameSite=Lax",
+    isProd ? "SameSite=None" : "SameSite=Lax",
     `Max-Age=${maxAge}`,
   ];
 
@@ -34,7 +34,7 @@ export function buildCsrfCookie(csrfToken: string, maxAge: number = SESSION_MAX_
   const directives = [
     `${CSRF_COOKIE_NAME}=${csrfToken}`,
     "Path=/",
-    "SameSite=Lax",
+    isProd ? "SameSite=None" : "SameSite=Lax",
     `Max-Age=${maxAge}`,
   ];
 
@@ -50,10 +50,11 @@ export function buildCsrfCookie(csrfToken: string, maxAge: number = SESSION_MAX_
  */
 export function buildClearAuthCookies(): string[] {
   const isProd = env.NODE_ENV === "production";
+  const sameSite = isProd ? "SameSite=None" : "SameSite=Lax";
   const secureFlag = isProd ? "; Secure" : "";
   return [
-    `${SESSION_COOKIE_NAME}=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT${secureFlag}`,
-    `${CSRF_COOKIE_NAME}=; Path=/; SameSite=Lax; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT${secureFlag}`,
+    `${SESSION_COOKIE_NAME}=; HttpOnly; Path=/; ${sameSite}; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT${secureFlag}`,
+    `${CSRF_COOKIE_NAME}=; Path=/; ${sameSite}; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT${secureFlag}`,
   ];
 }
 
