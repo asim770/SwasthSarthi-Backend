@@ -174,29 +174,31 @@ describe("SwasthSaarthi — Role-Based Notification Ownership & User Management 
       verificationStatus: "APPROVED",
     });
 
-    // Build Principals
-    adminPrincipal = { id: adminUser._id.toString(), role: "admin", name: adminUser.name };
-    otherAdminPrincipal = { id: otherAdminUser._id.toString(), role: "admin", name: otherAdminUser.name };
-    patientPrincipal = {
-      id: patientUser._id.toString(),
-      role: "patient",
-      name: patientUser.name,
-      patientId: patientUser.patientId,
-      abhaAddress: patientUser.abhaAddress,
-    };
-    otherPatientPrincipal = {
-      id: otherPatientUser._id.toString(),
-      role: "patient",
-      name: otherPatientUser.name,
-      patientId: otherPatientUser.patientId,
-      abhaAddress: otherPatientUser.abhaAddress,
-    };
-    doctorPrincipal = { id: doctorUser._id.toString(), role: "doctor", name: doctorUser.name, facility: doctorUser.facility };
-    otherDoctorPrincipal = { id: otherDoctorUser._id.toString(), role: "doctor", name: otherDoctorUser.name, facility: otherDoctorUser.facility };
-    labPrincipal = { id: labUser._id.toString(), role: "laboratory", name: labUser.name, facility: labUser.facility };
-    otherLabPrincipal = { id: otherLabUser._id.toString(), role: "laboratory", name: otherLabUser.name, facility: otherLabUser.facility };
-    pharmacyPrincipal = { id: pharmacyUser._id.toString(), role: "pharmacy", name: pharmacyUser.name, facility: pharmacyUser.facility };
-    otherPharmacyPrincipal = { id: otherPharmacyUser._id.toString(), role: "pharmacy", name: otherPharmacyUser.name, facility: otherPharmacyUser.facility };
+    // Build Principals helper
+    const buildPrincipal = (u: IUser, extra: Partial<AuthenticatedPrincipal> = {}): AuthenticatedPrincipal => ({
+      id: u._id.toString(),
+      abhaId: u.abhaId || `ABHA-${u._id}`,
+      abhaAddress: u.abhaAddress || `${u._id}@sbx`,
+      name: u.name,
+      role: u.role,
+      isActive: u.isActive ?? true,
+      sessionId: `test-session-${u._id}`,
+      patientId: u.patientId,
+      facility: u.facility,
+      verificationStatus: u.verificationStatus,
+      ...extra,
+    });
+
+    adminPrincipal = buildPrincipal(adminUser);
+    otherAdminPrincipal = buildPrincipal(otherAdminUser);
+    patientPrincipal = buildPrincipal(patientUser);
+    otherPatientPrincipal = buildPrincipal(otherPatientUser);
+    doctorPrincipal = buildPrincipal(doctorUser);
+    otherDoctorPrincipal = buildPrincipal(otherDoctorUser);
+    labPrincipal = buildPrincipal(labUser);
+    otherLabPrincipal = buildPrincipal(otherLabUser);
+    pharmacyPrincipal = buildPrincipal(pharmacyUser);
+    otherPharmacyPrincipal = buildPrincipal(otherPharmacyUser);
   });
 
   after(async () => {

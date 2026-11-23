@@ -10,7 +10,8 @@
     "lint": "eslint .",
     "test": "tsx --test --test-force-exit --test-concurrency=1 test/**/*.test.ts",
     "workers": "tsx src/worker.ts",
-    "seed": "tsx src/lib/db/seed.ts"
+    "seed": "tsx src/lib/db/seed.ts",
+    "clean-data": "tsx src/scripts/cleanDummyData.ts"
   },
   "dependencies": {
     "@types/node": "^20",
