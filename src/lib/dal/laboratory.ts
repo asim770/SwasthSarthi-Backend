@@ -572,25 +572,105 @@ export async function getLaboratorySubmittedReports(
   requireAllowedRole(principal, ["laboratory"], "Only laboratory technicians may query facility reports.");
   await connectToDatabase();
 
-  if (!principal.facility) {
-    throw new ForbiddenError("Laboratory technician is not affiliated with a registered healthcare facility.");
+  const facilityName = principal.facility?.trim() || principal.name?.trim();
+
+  // 1. Fetch from SourceInstitutionRecord (ABDM source store)
+  const sourceQuery: Record<string, unknown> = { resourceType: "DiagnosticReport" };
+  if (facilityName) {
+    sourceQuery.$or = [
+      { institutionName: facilityName },
+      { institutionId: facilityName },
+      { institutionName: { $regex: new RegExp(`^${facilityName}$`, "i") } },
+    ];
+  }
+  const sourceReports = await SourceInstitutionRecord.find(sourceQuery).sort({ recordDate: -1 }).limit(100);
+
+  // 2. Fetch from HealthRecord (Direct uploads & verified orders)
+  const healthQuery: Record<string, unknown> = { resourceType: "DiagnosticReport" };
+  const healthOr: Record<string, unknown>[] = [];
+  if (facilityName) {
+    healthOr.push({ providerFacility: facilityName });
+    healthOr.push({ "clinicalData.laboratoryName": facilityName });
+    healthOr.push({ "clinicalData.technicianName": facilityName });
+  }
+  if (principal.name) {
+    healthOr.push({ providerFacility: principal.name });
+    healthOr.push({ "clinicalData.technicianName": principal.name });
+    healthOr.push({ doctorName: { $regex: principal.name, $options: "i" } });
+  }
+  try {
+    healthOr.push({ doctorId: new mongoose.Types.ObjectId(principal.id) });
+  } catch {
+    // ignore
+  }
+  if (healthOr.length > 0) {
+    healthQuery.$or = healthOr;
+  }
+  const healthReports = await HealthRecord.find(healthQuery)
+    .populate("patientId", "name patientId abhaId abhaAddress")
+    .sort({ date: -1 })
+    .limit(100);
+
+  const seenRecordIds = new Set<string>();
+  const combined: Array<Record<string, unknown>> = [];
+
+  for (const hr of healthReports) {
+    const pt = hr.patientId as unknown as { name?: string; patientId?: string; abhaAddress?: string } | null;
+    const recId = hr.recordId;
+    if (seenRecordIds.has(recId)) continue;
+    seenRecordIds.add(recId);
+
+    const testName = (hr.clinicalData?.testName as string) || hr.title;
+    const patientName = (hr.clinicalData?.patientName as string) || pt?.name || "Patient";
+    const patientId = (hr.clinicalData?.patientId as string) || pt?.patientId || "";
+
+    combined.push({
+      recordId: hr.recordId,
+      careContextId: hr.careContextId,
+      title: hr.title,
+      testName,
+      patientName,
+      patientId,
+      patientAbhaAddress: pt?.abhaAddress || "",
+      summary: hr.summary,
+      sourceInstitution: hr.providerFacility,
+      providerFacility: hr.providerFacility,
+      date: hr.date ? hr.date.toISOString() : new Date().toISOString(),
+      recordDate: hr.date ? hr.date.toISOString() : new Date().toISOString(),
+      status: hr.status,
+      observations: hr.clinicalData?.observations || [],
+      testResults: hr.clinicalData?.testResults || {},
+      pdfAttachment: hr.clinicalData?.pdfAttachment,
+      notes: hr.clinicalData?.notes,
+      fhirResource: hr.clinicalData,
+    });
   }
 
-  const reports = await SourceInstitutionRecord.find({
-    institutionName: principal.facility,
-    resourceType: "DiagnosticReport",
-  }).sort({ recordDate: -1 });
+  for (const sr of sourceReports) {
+    const recId = sr.recordId.replace(/^SRC-/, "");
+    if (seenRecordIds.has(recId) || seenRecordIds.has(sr.recordId)) continue;
+    seenRecordIds.add(recId);
+    seenRecordIds.add(sr.recordId);
 
-  return reports.map((r) => ({
-    recordId: r.recordId,
-    careContextId: r.careContextId,
-    testName: r.careContextDescription,
-    patientName: r.patientName,
-    patientAbhaAddress: r.patientAbhaAddress,
-    recordDate: r.recordDate,
-    status: r.status,
-    fhirResource: r.fhirResource,
-  }));
+    combined.push({
+      recordId: sr.recordId,
+      careContextId: sr.careContextId,
+      title: sr.careContextDescription || "Diagnostic Report",
+      testName: sr.careContextDescription,
+      patientName: sr.patientName,
+      patientId: sr.patientAbhaId || "",
+      patientAbhaAddress: sr.patientAbhaAddress,
+      summary: (sr.fhirResource as Record<string, unknown>)?.conclusion || "Diagnostic lab report verified.",
+      sourceInstitution: sr.institutionName,
+      providerFacility: sr.institutionName,
+      date: sr.recordDate ? sr.recordDate.toISOString() : new Date().toISOString(),
+      recordDate: sr.recordDate ? sr.recordDate.toISOString() : new Date().toISOString(),
+      status: sr.status,
+      fhirResource: sr.fhirResource,
+    });
+  }
+
+  return combined;
 }
 
 export interface UploadDirectLabReportInput {
@@ -657,8 +737,40 @@ export async function uploadDirectLaboratoryReport(
       pdfAttachment: input.pdfAttachment,
       notes: input.notes,
       orderId: input.orderId,
+      patientId: patient.patientId,
+      patientName: patient.name,
     },
   });
+
+  // Also record DiagnosticReport into SourceInstitutionRecord for simulated ABDM discovery
+  try {
+    await SourceInstitutionRecord.create({
+      recordId: `SRC-${reportRecordId}`,
+      institutionId: facility.toUpperCase().replace(/\s+/g, "-"),
+      institutionName: facility,
+      institutionType: "laboratory",
+      patientAbhaId: patient.abhaId || patient.patientId,
+      patientAbhaAddress: patient.abhaAddress || `${patient.patientId}@abdm`,
+      patientName: patient.name,
+      careContextId,
+      careContextDescription: input.testName,
+      resourceType: "DiagnosticReport",
+      recordDate: now,
+      status: "final",
+      fhirResource: {
+        resourceType: "DiagnosticReport",
+        id: reportRecordId,
+        status: "final",
+        code: { text: input.testName },
+        subject: { display: patient.name, reference: `Patient/${patient.patientId}` },
+        conclusion: summary,
+        result: input.observations || [],
+      },
+      isMockData: false,
+    });
+  } catch (_e) {
+    // Non-blocking
+  }
 
   // If orderId was provided, mark LabOrder as completed
   if (input.orderId) {
