@@ -81,7 +81,7 @@ describe("SwasthSaarthi — Authentication System Upgrade Suite", () => {
     assert.equal(body.data.user.email, "test.google.patient@example.com");
   });
 
-  test("3. Google OAuth Login returns 404 ACCOUNT_NOT_FOUND when identity is unregistered and mode is login", async () => {
+  test("3. Google OAuth Login auto-provisions patient account when identity is new", async () => {
     const mockToken = "mock-google-token:unknown999:unregistered@example.com";
     const req = new NextRequest("http://localhost:3000/api/v1/auth/google", {
       method: "POST",
@@ -93,9 +93,15 @@ describe("SwasthSaarthi — Authentication System Upgrade Suite", () => {
     });
 
     const res = await googleAuthHandler(req);
-    assert.equal(res.status, 404);
+    assert.equal(res.status, 200);
     const body = await res.json();
-    assert.equal(body.error.code, "ACCOUNT_NOT_FOUND");
+    assert.equal(body.success, true);
+    assert.equal(body.data.isNewUser, true);
+    assert.ok(body.data.user.patientId, "Auto-provisioned patient must have a Patient ID");
+    assert.equal(body.data.user.email, "unregistered@example.com");
+
+    const userDoc = await User.findOne({ email: "unregistered@example.com" });
+    assert.ok(userDoc, "Auto-provisioned Google user should be persisted in MongoDB");
   });
 
   let manualPatientId = "";

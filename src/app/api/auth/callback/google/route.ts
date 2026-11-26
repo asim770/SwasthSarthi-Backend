@@ -4,6 +4,7 @@ import { connectToDatabase } from "@/lib/db/connect";
 import { User } from "@/lib/db/models/User";
 import { createSession } from "@/lib/auth/session";
 import { generateUniquePatientId } from "@/lib/auth/patientId";
+import { getActiveGoogleClientId, getGoogleClientSecret } from "@/lib/auth/googleConfig";
 import { isOriginAllowed } from "@/lib/api/cors";
 import { env } from "@/lib/env";
 
@@ -41,11 +42,18 @@ export async function GET(request: NextRequest) {
   }
 
   try {
+    const clientId = getActiveGoogleClientId();
+    const clientSecret = getGoogleClientSecret();
+    if (!clientSecret) {
+      console.error("GOOGLE_CLIENT_SECRET is not configured in server environment.");
+      return NextResponse.redirect(`${targetFrontendUrl}/?auth_error=missing_client_secret`);
+    }
+
     const tokenUrl = "https://oauth2.googleapis.com/token";
     const params = new URLSearchParams({
       code,
-      client_id: env.GOOGLE_CLIENT_ID || "",
-      client_secret: env.GOOGLE_CLIENT_SECRET || "",
+      client_id: clientId,
+      client_secret: clientSecret,
       redirect_uri: effectiveRedirectUri,
       grant_type: "authorization_code",
     });

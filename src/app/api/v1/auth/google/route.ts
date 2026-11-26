@@ -9,6 +9,7 @@ import { User } from "@/lib/db/models/User";
 import { createSession } from "@/lib/auth/session";
 import { logAuditEvent } from "@/lib/dal/audit";
 import { generateUniquePatientId } from "@/lib/auth/patientId";
+import { getActiveGoogleClientId, getGoogleClientSecret } from "@/lib/auth/googleConfig";
 import { env } from "@/lib/env";
 
 export const dynamic = "force-dynamic";
@@ -23,17 +24,12 @@ export async function OPTIONS(request: NextRequest) {
   return handleCorsPreflight(request);
 }
 
-const ACTIVE_GOOGLE_CLIENT_ID = "666611753013-91i8o6iasa6b80041k2kl07ocjoa9lk3.apps.googleusercontent.com";
-
 /**
  * GET /api/v1/auth/google
  * Returns public Google OAuth client configuration for the frontend
  */
 export async function GET(request: NextRequest) {
-  let clientId = (env.GOOGLE_CLIENT_ID || "").trim();
-  if (!clientId || clientId.includes("cp94eclg8ts7i1ddlqq9eijlnqbc9qgl")) {
-    clientId = ACTIVE_GOOGLE_CLIENT_ID;
-  }
+  const clientId = getActiveGoogleClientId();
   const isConfigured = clientId.length > 0;
   const origin = request.headers.get("origin") || "";
   const dynamicRedirectUri = isOriginAllowed(origin)
@@ -96,12 +92,17 @@ export async function POST(request: NextRequest) {
 
     // If an authorization code was passed, exchange it with Google for tokens
     if (!tokenToVerify && code) {
+      const origin = request.headers.get("origin") || "";
+      const dynamicRedirectUri = isOriginAllowed(origin)
+        ? `${origin}/api/auth/callback/google`
+        : env.GOOGLE_REDIRECT_URI || "http://localhost:3000/api/auth/callback/google";
+
       const tokenUrl = "https://oauth2.googleapis.com/token";
       const params = new URLSearchParams({
         code,
-        client_id: env.GOOGLE_CLIENT_ID || "",
-        client_secret: env.GOOGLE_CLIENT_SECRET || "",
-        redirect_uri: env.GOOGLE_REDIRECT_URI || "http://localhost:3000/api/auth/callback/google",
+        client_id: getActiveGoogleClientId(),
+        client_secret: getGoogleClientSecret(),
+        redirect_uri: dynamicRedirectUri,
         grant_type: "authorization_code",
       });
 
