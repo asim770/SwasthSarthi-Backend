@@ -3,7 +3,7 @@ import { z } from "zod";
 import mongoose from "mongoose";
 import crypto from "crypto";
 import { apiSuccess, apiError } from "@/lib/api/response";
-import { handleCorsPreflight } from "@/lib/api/cors";
+import { handleCorsPreflight, isOriginAllowed } from "@/lib/api/cors";
 import { connectToDatabase } from "@/lib/db/connect";
 import { User } from "@/lib/db/models/User";
 import { createSession } from "@/lib/auth/session";
@@ -23,19 +23,28 @@ export async function OPTIONS(request: NextRequest) {
   return handleCorsPreflight(request);
 }
 
+const ACTIVE_GOOGLE_CLIENT_ID = "666611753013-91i8o6iasa6b80041k2kl07ocjoa9lk3.apps.googleusercontent.com";
+
 /**
  * GET /api/v1/auth/google
  * Returns public Google OAuth client configuration for the frontend
  */
 export async function GET(request: NextRequest) {
-  const clientId = env.GOOGLE_CLIENT_ID || "";
-  const isConfigured = clientId.trim().length > 0;
+  let clientId = (env.GOOGLE_CLIENT_ID || "").trim();
+  if (!clientId || clientId.includes("cp94eclg8ts7i1ddlqq9eijlnqbc9qgl")) {
+    clientId = ACTIVE_GOOGLE_CLIENT_ID;
+  }
+  const isConfigured = clientId.length > 0;
+  const origin = request.headers.get("origin") || "";
+  const dynamicRedirectUri = isOriginAllowed(origin)
+    ? `${origin}/api/auth/callback/google`
+    : env.GOOGLE_REDIRECT_URI || "http://localhost:3000/api/auth/callback/google";
 
   return apiSuccess(
     {
       clientId: isConfigured ? clientId : null,
       configured: isConfigured,
-      redirectUri: env.GOOGLE_REDIRECT_URI || "http://localhost:3000/api/auth/callback/google",
+      redirectUri: dynamicRedirectUri,
     },
     request,
     { status: 200 }
@@ -192,18 +201,7 @@ export async function POST(request: NextRequest) {
     let isNewlyCreated = false;
 
     if (!user) {
-      if (mode === "login") {
-        return apiError(
-          new Error("No account found matching this Google profile. Please register first."),
-          request,
-          {
-            status: 404,
-            code: "ACCOUNT_NOT_FOUND",
-            fallbackMessage: "No account found matching this Google profile. Please register first.",
-          }
-        );
-      }
-
+      // Auto-provision patient account on Google Sign-In or Sign-Up
       isNewlyCreated = true;
       const patientId = await generateUniquePatientId();
       const username = normalizedEmail.split("@")[0].replace(/[^a-zA-Z0-9]/g, "").toLowerCase() || "patient";

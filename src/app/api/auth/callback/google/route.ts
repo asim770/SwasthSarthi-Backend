@@ -4,6 +4,7 @@ import { connectToDatabase } from "@/lib/db/connect";
 import { User } from "@/lib/db/models/User";
 import { createSession } from "@/lib/auth/session";
 import { generateUniquePatientId } from "@/lib/auth/patientId";
+import { isOriginAllowed } from "@/lib/api/cors";
 import { env } from "@/lib/env";
 
 export const dynamic = "force-dynamic";
@@ -16,11 +17,27 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const code = searchParams.get("code");
   const error = searchParams.get("error");
+  const stateParam = searchParams.get("state");
 
-  const frontendUrl = env.CORS_ALLOWED_ORIGINS.split(",")[0] || "http://localhost:3000";
+  const defaultFrontendUrl = env.CORS_ALLOWED_ORIGINS.split(",")[0] || "http://localhost:3000";
+  let targetFrontendUrl = defaultFrontendUrl;
+  let effectiveRedirectUri = env.GOOGLE_REDIRECT_URI || "http://localhost:3000/api/auth/callback/google";
+
+  // Parse state parameter to preserve the user's initiating origin and redirect URI
+  if (stateParam) {
+    try {
+      const parsed = JSON.parse(decodeURIComponent(stateParam));
+      if (parsed.origin && isOriginAllowed(parsed.origin)) {
+        targetFrontendUrl = parsed.origin;
+        effectiveRedirectUri = `${parsed.origin}/api/auth/callback/google`;
+      }
+    } catch {
+      // Ignore unparseable state
+    }
+  }
 
   if (error || !code) {
-    return NextResponse.redirect(`${frontendUrl}/?auth_error=${encodeURIComponent(error || "missing_code")}`);
+    return NextResponse.redirect(`${targetFrontendUrl}/?auth_error=${encodeURIComponent(error || "missing_code")}`);
   }
 
   try {
@@ -29,7 +46,7 @@ export async function GET(request: NextRequest) {
       code,
       client_id: env.GOOGLE_CLIENT_ID || "",
       client_secret: env.GOOGLE_CLIENT_SECRET || "",
-      redirect_uri: env.GOOGLE_REDIRECT_URI || "http://localhost:3000/api/auth/callback/google",
+      redirect_uri: effectiveRedirectUri,
       grant_type: "authorization_code",
     });
 
@@ -41,7 +58,7 @@ export async function GET(request: NextRequest) {
 
     if (!exchangeResponse.ok) {
       console.error("Google OAuth token exchange failed:", await exchangeResponse.text());
-      return NextResponse.redirect(`${frontendUrl}/?auth_error=code_exchange_failed`);
+      return NextResponse.redirect(`${targetFrontendUrl}/?auth_error=code_exchange_failed`);
     }
 
     const tokenData = await exchangeResponse.json();
@@ -51,7 +68,7 @@ export async function GET(request: NextRequest) {
     const verifyResponse = await fetch(verifyUrl, { method: "GET" });
 
     if (!verifyResponse.ok) {
-      return NextResponse.redirect(`${frontendUrl}/?auth_error=token_verification_failed`);
+      return NextResponse.redirect(`${targetFrontendUrl}/?auth_error=token_verification_failed`);
     }
 
     const googlePayload = await verifyResponse.json();
@@ -59,7 +76,7 @@ export async function GET(request: NextRequest) {
     const googleSub = googlePayload.sub?.trim();
 
     if (!email) {
-      return NextResponse.redirect(`${frontendUrl}/?auth_error=missing_email`);
+      return NextResponse.redirect(`${targetFrontendUrl}/?auth_error=missing_email`);
     }
 
     await connectToDatabase();
@@ -119,7 +136,7 @@ export async function GET(request: NextRequest) {
 
     const { cookieHeaders } = await createSession(user._id, user.role, request);
 
-    const response = NextResponse.redirect(`${frontendUrl}/dashboard?login=success`);
+    const response = NextResponse.redirect(`${targetFrontendUrl}/dashboard?login=success`);
     for (const cookie of cookieHeaders) {
       response.headers.append("Set-Cookie", cookie);
     }
@@ -127,6 +144,6 @@ export async function GET(request: NextRequest) {
     return response;
   } catch (err) {
     console.error("Google OAuth callback error:", err);
-    return NextResponse.redirect(`${frontendUrl}/?auth_error=internal_error`);
+    return NextResponse.redirect(`${targetFrontendUrl}/?auth_error=internal_error`);
   }
 }

@@ -36,7 +36,7 @@ const envSchema = z.object({
   OTP_MAX_SENDS_PER_WINDOW: z.coerce.number().default(3),
   OTP_MAX_VERIFY_ATTEMPTS_PER_WINDOW: z.coerce.number().default(5),
   // Google OAuth Configuration
-  GOOGLE_CLIENT_ID: z.string().optional().default("666611753013-cp94eclg8ts7i1ddlqq9eijlnqbc9qgl.apps.googleusercontent.com"),
+  GOOGLE_CLIENT_ID: z.string().optional().default("666611753013-91i8o6iasa6b80041k2kl07ocjoa9lk3.apps.googleusercontent.com"),
   GOOGLE_CLIENT_SECRET: z.string().optional(),
   GOOGLE_REDIRECT_URI: z.string().optional().default("http://localhost:3000/api/auth/callback/google"),
   JWT_SECRET: z.string().optional(),
